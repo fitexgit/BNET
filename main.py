@@ -100,6 +100,8 @@ async def load_state():
             CUSTOMERS.update(data.get("customers", {}))
             SETTINGS.update(data.get("settings", {}))
             SETTINGS.setdefault("cloudflare", {"domains": []})
+            SETTINGS.setdefault("panel", {"domain": "", "login_path": ""})
+            SETTINGS.setdefault("extra_domains", [])
             if "password_hash" in data:
                 AUTH["password_hash"] = data["password_hash"]
             logger.info(f"State loaded from JSON: {len(LINKS)} links, {len(SUBS)} subs")
@@ -140,7 +142,9 @@ SETTINGS: dict = {
     "theme": {"accent": "#2563EB", "radius": 16, "density": "comfortable", "mode": "light"},
     "security": {"lockout_enabled": True, "max_attempts": 5, "lock_minutes": 10, "allowed_ips": []},
     "cleanup": {"auto_delete_expired_days": 0, "inactive_archive_days": 0, "log_keep": 150, "low_resource": False},
+    "panel": {"domain": "", "login_path": ""},
     "cloudflare": {"domains": []},
+    "extra_domains": [],
     "smart_profiles": {
         "general": ["trojan-ws", "vless-ws", "xhttp-stream-up"],
         "mobile": ["trojan-ws", "vless-ws", "shadowsocks-tls"],
@@ -384,7 +388,54 @@ async def unique_config_path(base: str | None, fallback: str) -> str:
 def proto_slug(proto: str) -> str:
     return proto.replace('shadowsocks-tls', 'ss').replace('trojan-', 'tr-').replace('vless-', 'vl-').replace('xhttp-', 'xh-').replace('-up', '').replace('-one', '1')
 
+
+def normalize_login_path(value: str | None) -> str:
+    """Slug for custom login URL: /{slug}/login. Empty = default /login."""
+    if value is None:
+        return ""
+    value = str(value).strip().strip("/")
+    value = re.sub(r"^https?://", "", value, flags=re.I).split("/", 1)[0] if "://" in str(value) else value
+    value = value.strip().strip("/")
+    # only path segment characters
+    value = re.sub(r"[^A-Za-z0-9._-]", "", value)[:64]
+    # reserve system paths
+    reserved = {
+        "api", "login", "dashboard", "health", "stats", "sub", "sub-all", "sub-group",
+        "p", "ws", "proxy", "cf-sub", "domain-sub", "xhttp-siz10", "trojan-ws", "ss",
+        "docs", "redoc", "openapi.json", "test-ws",
+    }
+    if not value or value.lower() in reserved or len(value) < 4:
+        return ""
+    return value
+
+
+def get_login_path() -> str:
+    panel = SETTINGS.get("panel") or {}
+    return normalize_login_path(panel.get("login_path") or "")
+
+
+def get_panel_base() -> str:
+    """Prefix for panel routes when secret path is set, e.g. /mysecret"""
+    slug = get_login_path()
+    return f"/{slug}" if slug else ""
+
+
+def get_login_url() -> str:
+    base = get_panel_base()
+    return f"{base}/login" if base else "/login"
+
+
+def get_dashboard_url() -> str:
+    base = get_panel_base()
+    return f"{base}/dashboard" if base else "/dashboard"
+
+
 def get_host() -> str:
+    raw = str((SETTINGS.get("panel") or {}).get("domain") or "").strip()
+    if raw:
+        raw = re.sub(r"^https?://", "", raw, flags=re.I).split("/", 1)[0].strip().strip(".")
+        if raw:
+            return raw
     return os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"])
 
 def generate_uuid() -> str:
@@ -404,59 +455,73 @@ def _uri_authority_host(host: str) -> str:
         return f"[{host}]"
     return host
 
-def generate_share_link(uuid: str, host: str, remark: str = "OXNET", protocol: str = DEFAULT_PROTOCOL, sni_host: str | None = None) -> str:
+def generate_share_link(uuid: str, host: str, remark: str = "OXNET", protocol: str = DEFAULT_PROTOCOL, sni_host: str | None = None, port: int = 443) -> str:
     link_obj = LINKS.get(uuid, {})
     public_path = link_obj.get("path") or uuid
     tls_host = (sni_host or host).strip()
     authority_host = _uri_authority_host(host)
+    # port 80 = plain HTTP / no TLS for clients that support it; 443 = TLS
+    use_tls = int(port) != 80
+    security = "tls" if use_tls else "none"
     if protocol == "shadowsocks-tls":
         import base64
-        # SIP002 plugin form with explicit websocket mode and always a fragment/name.
-        # This fixes links that previously ended as "...?" without plugin/name.
         user = base64.urlsafe_b64encode(f"chacha20-ietf-poly1305:{uuid}".encode()).decode().rstrip("=")
-        plugin = quote(f"v2ray-plugin;tls;mode=websocket;host={tls_host};path=/ss/{public_path}", safe="")
-        return f"ss://{user}@{authority_host}:443?plugin={plugin}#{quote(remark or 'OXNET-Shadowsocks')}"
+        if use_tls:
+            plugin = quote(f"v2ray-plugin;tls;mode=websocket;host={tls_host};path=/ss/{public_path}", safe="")
+        else:
+            plugin = quote(f"v2ray-plugin;mode=websocket;host={tls_host};path=/ss/{public_path}", safe="")
+        tag = remark or "OXNET-Shadowsocks"
+        if not use_tls:
+            tag = f"{tag}-HTTP80"
+        return f"ss://{user}@{authority_host}:{int(port)}?plugin={plugin}#{quote(tag)}"
     if protocol == "mtproto":
         link = LINKS.get(uuid)
-        port = link.get("mtproto_port") if link else None
+        mport = link.get("mtproto_port") if link else None
         secret = link.get("mtproto_secret") if link else None
-        if not port or not secret:
+        if not mport or not secret:
             return f"tg://proxy?server={host}&port=0&secret=not_ready#{quote(remark)}"
         pub_host = link.get("mtproto_public_host") if link else None
         pub_port = link.get("mtproto_public_port") if link else None
         final_host = pub_host or host
-        final_port = pub_port or port
+        final_port = pub_port or mport
         return mtproto.generate_mtproto_link(final_host, final_port, secret)
     if protocol == "trojan-ws":
         params = {
-            "security": "tls", "type": "ws", "host": tls_host,
-            "path": "/trojan-ws", "sni": tls_host, "fp": "chrome", "alpn": "http/1.1",
+            "security": security, "type": "ws", "host": tls_host,
+            "path": "/trojan-ws", "fp": "chrome", "alpn": "http/1.1",
         }
+        if use_tls:
+            params["sni"] = tls_host
         query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        return f"trojan://{uuid}@{authority_host}:443?{query}#{quote(remark)}"
+        tag = remark if use_tls else f"{remark}-HTTP80"
+        return f"trojan://{uuid}@{authority_host}:{int(port)}?{query}#{quote(tag)}"
     if protocol.startswith("trojan-xhttp-"):
         mode = protocol.replace("trojan-xhttp-", "")
         if mode == "stream-one":
             mode = "stream-up"
         path = f"/xhttp-siz10/{mode}/{public_path}"
         params = {
-            "security": "tls", "type": "xhttp", "mode": mode, "host": tls_host,
-            "path": path, "sni": tls_host, "fp": "chrome", "alpn": "h2,http/1.1",
+            "security": security, "type": "xhttp", "mode": mode, "host": tls_host,
+            "path": path, "fp": "chrome", "alpn": "h2,http/1.1",
         }
+        if use_tls:
+            params["sni"] = tls_host
         query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        return f"trojan://{uuid}@{authority_host}:443?{query}#{quote(remark)}"
+        tag = remark if use_tls else f"{remark}-HTTP80"
+        return f"trojan://{uuid}@{authority_host}:{int(port)}?{query}#{quote(tag)}"
     if protocol == "vless-ws":
         path = f"/ws/{public_path}"
         params = {
             "encryption": "none",
-            "security": "tls",
+            "security": security,
             "type": "ws",
             "host": tls_host,
             "path": path,
-            "sni": tls_host,
             "fp": "chrome",
             "alpn": "http/1.1",
         }
+        if use_tls:
+            params["sni"] = tls_host
     else:
         mode = protocol.replace("xhttp-", "")
         if mode == "stream-one":
@@ -464,17 +529,19 @@ def generate_share_link(uuid: str, host: str, remark: str = "OXNET", protocol: s
         path = f"/xhttp-siz10/{mode}/{public_path}"
         params = {
             "encryption": "none",
-            "security": "tls",
+            "security": security,
             "type": "xhttp",
             "mode": mode,
             "host": tls_host,
             "path": path,
-            "sni": tls_host,
             "fp": "chrome",
             "alpn": "h2,http/1.1",
         }
+        if use_tls:
+            params["sni"] = tls_host
     query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-    return f"vless://{uuid}@{authority_host}:443?{query}#{quote(remark)}"
+    tag = remark if use_tls else f"{remark}-HTTP80"
+    return f"vless://{uuid}@{authority_host}:{int(port)}?{query}#{quote(tag)}"
 
 def uptime() -> str:
     secs = int(time.time() - stats["start_time"])
@@ -573,9 +640,8 @@ async def subscription_single(uuid: str):
     if not link or not is_link_allowed(link):
         raise HTTPException(status_code=404, detail="not found or inactive")
     host = get_host()
-    proto = link.get("protocol", DEFAULT_PROTOCOL)
-    vless = generate_share_link(uid, host, remark=f"OXNET-{link['label']}", protocol=proto)
-    content = base64.b64encode(vless.encode()).decode()
+    lines = _share_lines_for_all_domains(uid, link, host)
+    content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain",
                     headers={"profile-title": quote(link["label"])})
 
@@ -584,11 +650,10 @@ async def subscription_all(_=Depends(require_auth)):
     import base64
     host = get_host()
     async with LINKS_LOCK:
-        lines = [
-            generate_share_link(uid, host, remark=f"OXNET-{d['label']}", protocol=d.get("protocol", DEFAULT_PROTOCOL))
-            for uid, d in LINKS.items()
-            if is_link_allowed(d)
-        ]
+        lines = []
+        for uid, d in LINKS.items():
+            if is_link_allowed(d):
+                lines.extend(_share_lines_for_all_domains(uid, d, host))
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain")
 
@@ -647,6 +712,7 @@ async def list_subs(_=Depends(require_auth)):
             "public_url": f"https://{host}/p/{s['uuid_key']}",
             "sub_url": f"https://{host}/sub-group/{s['uuid_key']}",
             "cloudflare_subs": cloudflare_sub_urls_for_key(host, s["uuid_key"]),
+            "domain_subs": domain_sub_urls_for_key(host, s["uuid_key"]),
         })
     result.sort(key=lambda x: x["created_at"], reverse=True)
     return {"subs": result}
@@ -654,46 +720,19 @@ async def list_subs(_=Depends(require_auth)):
 @app.patch("/api/subs/{sub_id}")
 async def update_sub(sub_id: str, request: Request, _=Depends(require_auth)):
     body = await request.json()
-    link_ids_snapshot = []
-    apply_to_children = any(k in body for k in ("limit_value", "limit_unit", "expires_days", "active", "reset_usage"))
     async with SUBS_LOCK:
         if sub_id not in SUBS:
             raise HTTPException(status_code=404, detail="sub not found")
         s = SUBS[sub_id]
         if "name" in body:
-            s["name"] = str(body["name"] or s.get("name") or "Multi")[:60]
+            s["name"] = str(body["name"])[:60]
         if "desc" in body:
-            s["desc"] = str(body["desc"] or "")[:200]
+            s["desc"] = str(body["desc"])[:200]
         if "password" in body:
-            pw = str(body["password"] or "").strip()
+            pw = str(body["password"]).strip()
             s["password_hash"] = hash_password(pw) if pw else None
         if "link_ids" in body:
-            s["link_ids"] = list(body["link_ids"] or [])
-        link_ids_snapshot = list(s.get("link_ids") or [])
-    if apply_to_children and link_ids_snapshot:
-        limit_bytes = None
-        if "limit_value" in body:
-            lv = float(body.get("limit_value") or 0)
-            lu = body.get("limit_unit") or "GB"
-            limit_bytes = 0 if lv <= 0 else parse_size_to_bytes(lv, lu)
-        expires_at = "UNCHANGED"
-        if "expires_days" in body:
-            ed = int(body.get("expires_days") or 0)
-            expires_at = (datetime.now() + timedelta(days=ed)).isoformat() if ed > 0 else None
-        async with LINKS_LOCK:
-            for lid in link_ids_snapshot:
-                link = LINKS.get(lid)
-                if not link:
-                    continue
-                if limit_bytes is not None:
-                    link["limit_bytes"] = limit_bytes
-                if expires_at != "UNCHANGED":
-                    link["expires_at"] = expires_at
-                if "active" in body:
-                    link["active"] = bool(body.get("active"))
-                if body.get("reset_usage"):
-                    link["used_bytes"] = 0
-        log_activity("sub", f"گروه/مولتی «{sub_id}» ویرایش شد", "info")
+            s["link_ids"] = list(body["link_ids"])
     await save_state()
     return {"ok": True}
 
@@ -753,7 +792,7 @@ async def sub_group_subscription(uuid_key: str, request: Request):
         for lid in link_ids:
             link = LINKS.get(lid)
             if link and is_link_allowed(link):
-                lines.append(generate_share_link(lid, host, remark=f"OXNET-{link['label']}", protocol=link.get("protocol", DEFAULT_PROTOCOL)))
+                lines.extend(_share_lines_for_all_domains(lid, link, host))
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(
         content=content,
@@ -954,6 +993,70 @@ def _find_cf_domain(key: str) -> dict | None:
             return d
     return None
 
+
+def _extra_domains() -> list[dict]:
+    items = SETTINGS.setdefault("extra_domains", [])
+    if not isinstance(items, list):
+        SETTINGS["extra_domains"] = []
+        return SETTINGS["extra_domains"]
+    return items
+
+def _find_extra_domain(key: str) -> dict | None:
+    key_n = _norm_domain(key) or key
+    for d in _extra_domains():
+        if d.get("domain") == key_n or d.get("slug") == key or d.get("id") == key:
+            return d
+    return None
+
+
+def _config_ports_for_proto(proto: str) -> tuple[int, ...]:
+    """HTTPS 443 + HTTP 80 for all tunnel protocols (not MTProto)."""
+    if proto == "mtproto":
+        return ()
+    return (443, 80)
+
+def _share_lines_for_all_domains(uid: str, link: dict, host: str) -> list[str]:
+    """کانفیگ‌های یک لینک برای دامنه اصلی + کلادفلیر + دامنه‌های فرعی — با پورت 443 (HTTPS)."""
+    proto = link.get("protocol", DEFAULT_PROTOCOL)
+    label = link.get("label", "")
+    lines: list[str] = []
+    if proto == "mtproto":
+        lines.append(generate_share_link(uid, host, remark=f"OXNET-{label}", protocol=proto))
+        return lines
+    lines.append(generate_share_link(uid, host, remark=f"OXNET-{label}", protocol=proto))
+    # دامنه‌های Cloudflare (با IP تمیز یا خود دامنه)
+    for cf in _cf_domains():
+        domain = cf.get("domain") or ""
+        if not domain:
+            continue
+        clean_ips = cf.get("clean_ips") or []
+        targets = clean_ips if clean_ips else [domain]
+        for target in targets:
+            remark = f"OXNET-CF-{domain}-{label}" + (f"-{target}" if clean_ips else "")
+            lines.append(generate_share_link(uid, target, remark=remark, protocol=proto, sni_host=domain))
+    # دامنه‌های فرعی
+    for ed in _extra_domains():
+        domain = ed.get("domain") or ""
+        if not domain:
+            continue
+        remark = f"OXNET-{domain}-{label}"
+        lines.append(generate_share_link(uid, domain, remark=remark, protocol=proto, sni_host=domain))
+    return lines
+
+def domain_sub_urls_for_key(host: str, uuid_key: str) -> dict:
+    """URLهای ساب جدا برای دامنه اصلی و دامنه‌های فرعی."""
+    main_url = f"https://{host}/domain-sub/main/{uuid_key}"
+    extra = []
+    for ed in _extra_domains():
+        slug = ed.get("slug") or _cf_slug(ed.get("domain", ""))
+        extra.append({
+            "name": ed.get("name") or ed.get("domain"),
+            "domain": ed.get("domain"),
+            "slug": slug,
+            "sub_url": f"https://{host}/domain-sub/extra/{slug}/{uuid_key}",
+        })
+    return {"main_domain": host, "main_sub_url": main_url, "extra_subs": extra}
+
 def cloudflare_sub_urls_for_key(host: str, uuid_key: str) -> list[dict]:
     return [
         {
@@ -1065,6 +1168,133 @@ async def cloudflare_group_subscription(key: str, uuid_key: str, request: Reques
                 lines.append(generate_share_link(lid, target, remark=remark, protocol=proto, sni_host=domain))
     content=base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={"profile-title": quote(f"{sub.get('name','OXNET')} Cloudflare {domain}")})
+
+
+# ── Extra domains (دامنه فرعی) + domain-specific subs ─────────────────────────
+@app.get("/api/extra-domains")
+async def api_extra_domains(_=Depends(require_auth)):
+    host = get_host()
+    items = []
+    for d in _extra_domains():
+        slug = d.get("slug") or _cf_slug(d.get("domain", ""))
+        items.append({
+            **d,
+            "slug": slug,
+            "sub_url": f"https://{host}/domain-sub/extra/{slug}",
+            "group_sub_template": f"https://{host}/domain-sub/extra/{slug}/{{uuid_key}}",
+        })
+    return {"domains": items, "panel_domain": host}
+
+@app.post("/api/extra-domains")
+async def api_extra_domain_save(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    domain = _norm_domain(body.get("domain") or "")
+    if not domain or "." not in domain:
+        raise HTTPException(status_code=400, detail="دامنه فرعی معتبر نیست")
+    name = (body.get("name") or domain).strip()[:80]
+    key = str(body.get("key") or body.get("id") or body.get("slug") or "").strip()
+    domains = _extra_domains()
+    item = next((x for x in domains if key and (x.get("id") == key or x.get("slug") == key or x.get("domain") == _norm_domain(key))), None)
+    if not item:
+        item = next((x for x in domains if x.get("domain") == domain), None)
+    if not item:
+        item = {"id": generate_uuid(), "slug": _cf_slug(domain), "domain": domain, "created_at": datetime.now().isoformat()}
+        domains.append(item)
+    item.update({"name": name, "domain": domain, "slug": _cf_slug(domain), "updated_at": datetime.now().isoformat()})
+    await save_state()
+    host = get_host()
+    return {"ok": True, "domain": item, "sub_url": f"https://{host}/domain-sub/extra/{item['slug']}"}
+
+@app.delete("/api/extra-domains/{key}")
+async def api_extra_domain_delete(key: str, _=Depends(require_auth)):
+    domains = _extra_domains()
+    item = _find_extra_domain(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="دامنه فرعی پیدا نشد")
+    domains.remove(item)
+    await save_state()
+    return {"ok": True}
+
+@app.get("/domain-sub/main/{uuid_key}")
+async def domain_sub_main(uuid_key: str, request: Request):
+    """ساب فقط با دامنه اصلی پنل."""
+    import base64
+    async with SUBS_LOCK:
+        sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
+    if not sub:
+        raise HTTPException(status_code=404, detail="not found")
+    if sub.get("password_hash"):
+        pw = request.query_params.get("pw", "")
+        if hash_password(pw) != sub["password_hash"]:
+            raise HTTPException(status_code=403, detail="wrong password")
+    host = get_host()
+    link_ids = sub.get("link_ids", [])
+    async with LINKS_LOCK:
+        lines = []
+        for lid in link_ids:
+            link = LINKS.get(lid)
+            if link and is_link_allowed(link):
+                proto = link.get("protocol", DEFAULT_PROTOCOL)
+                lines.append(generate_share_link(lid, host, remark=f"OXNET-{link['label']}", protocol=proto))
+    content = base64.b64encode("\n".join(lines).encode()).decode()
+    return Response(content=content, media_type="text/plain", headers={
+        "profile-title": quote(f"{sub.get('name','OXNET')} Main"),
+        "profile-update-interval": "12",
+    })
+
+@app.get("/domain-sub/extra/{key}")
+async def domain_sub_extra_all(key: str):
+    """ساب همه کانفیگ‌های فعال فقط روی یک دامنه فرعی."""
+    import base64
+    item = _find_extra_domain(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="extra domain not found")
+    domain = item.get("domain")
+    host = get_host()
+    async with LINKS_LOCK:
+        snap = dict(LINKS)
+    lines = []
+    for uid, link in snap.items():
+        if not is_link_allowed(link):
+            continue
+        proto = link.get("protocol", DEFAULT_PROTOCOL)
+        if proto == "mtproto":
+            continue
+        lines.append(generate_share_link(uid, domain, remark=f"OXNET-{domain}-{link.get('label','')}", protocol=proto, sni_host=domain))
+    content = base64.b64encode("\n".join(lines).encode()).decode()
+    return Response(content=content, media_type="text/plain", headers={"profile-title": quote(f"OXNET {domain}")})
+
+@app.get("/domain-sub/extra/{key}/{uuid_key}")
+async def domain_sub_extra_group(key: str, uuid_key: str, request: Request):
+    import base64
+    item = _find_extra_domain(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="extra domain not found")
+    async with SUBS_LOCK:
+        sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
+    if not sub:
+        raise HTTPException(status_code=404, detail="sub not found")
+    if sub.get("password_hash"):
+        pw = request.query_params.get("pw", "")
+        if hash_password(pw) != sub["password_hash"]:
+            raise HTTPException(status_code=403, detail="wrong password")
+    domain = item.get("domain")
+    link_ids = sub.get("link_ids", [])
+    async with LINKS_LOCK:
+        lines = []
+        for lid in link_ids:
+            link = LINKS.get(lid)
+            if not link or not is_link_allowed(link):
+                continue
+            proto = link.get("protocol", DEFAULT_PROTOCOL)
+            if proto == "mtproto":
+                continue
+            lines.append(generate_share_link(lid, domain, remark=f"OXNET-{domain}-{link.get('label','')}", protocol=proto, sni_host=domain))
+    content = base64.b64encode("\n".join(lines).encode()).decode()
+    return Response(content=content, media_type="text/plain", headers={
+        "profile-title": quote(f"{sub.get('name','OXNET')} {domain}"),
+        "profile-update-interval": "12",
+    })
 
 # ── Link Management ───────────────────────────────────────────────────────────
 @app.post("/api/links")
@@ -1472,6 +1702,7 @@ async def public_sub_data(uuid_key: str, request: Request):
         "desc": sub.get("desc", ""),
         "sub_url": f"https://{host}/sub-group/{uuid_key}",
         "cloudflare_subs": cloudflare_sub_urls_for_key(host, uuid_key),
+        "domain_subs": domain_sub_urls_for_key(host, uuid_key),
         "active_connections": active_conns,
         "total_used_fmt": fmt_bytes(total_used),
         "links": links_out,
@@ -1483,17 +1714,30 @@ async def public_sub_data(uuid_key: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/settings")
 async def api_settings(_=Depends(require_auth)):
-    return {"settings": SETTINGS}
+    return {"settings": SETTINGS, "host": get_host(), "default_host": os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"]), "login_url": get_login_url(), "login_path": get_login_path(), "dashboard_url": get_dashboard_url(), "panel_base": get_panel_base()}
 
 @app.patch("/api/settings")
 async def api_update_settings(request: Request, _=Depends(require_auth)):
     body = await request.json()
-    for section in ("theme", "security", "cleanup"):
+    for section in ("theme", "security", "cleanup", "panel"):
         if section in body and isinstance(body[section], dict):
             SETTINGS.setdefault(section, {}).update(body[section])
+            if section == "panel":
+                if "domain" in body["panel"]:
+                    SETTINGS["panel"]["domain"] = _norm_domain(str(body["panel"].get("domain") or ""))
+                if "login_path" in body["panel"]:
+                    SETTINGS["panel"]["login_path"] = normalize_login_path(str(body["panel"].get("login_path") or ""))
     await save_state()
     log_activity("system", "تنظیمات پیشرفته ذخیره شد", "ok")
-    return {"ok": True, "settings": SETTINGS}
+    return {
+        "ok": True,
+        "settings": SETTINGS,
+        "host": get_host(),
+        "login_url": get_login_url(),
+        "login_path": get_login_path(),
+        "dashboard_url": get_dashboard_url(),
+        "panel_base": get_panel_base(),
+    }
 
 @app.get("/api/customers")
 async def api_customers(_=Depends(require_auth)):
@@ -1676,7 +1920,7 @@ from pages import LOGIN_HTML, DASHBOARD_HTML
 
 def render_html(html: str) -> str:
     v = get_current_panel_version()
-    return html.replace("v1.0.0", f"v{v}").replace("v1.1.0", f"v{v}").replace("v1.2.0", f"v{v}").replace("v1.2.1", f"v{v}").replace("v2.0.0", f"v{v}").replace("v2.0.1", f"v{v}").replace("v2.0.2", f"v{v}").replace("v2.0.3", f"v{v}").replace("v2.0.4", f"v{v}").replace("v2.0.5", f"v{v}").replace("v2.0.6", f"v{v}").replace("v2.0.7", f"v{v}").replace("v2.0.8", f"v{v}").replace("v2.0.9", f"v{v}").replace("v2.0.10", f"v{v}").replace("· 1.0.0", f"· {v}").replace("· 1.1.0", f"· {v}").replace("· 1.2.0", f"· {v}").replace("· 1.2.1", f"· {v}").replace("· 2.0.0", f"· {v}").replace("· 2.0.1", f"· {v}").replace("· 2.0.2", f"· {v}").replace("· 2.0.3", f"· {v}").replace("· 2.0.4", f"· {v}").replace("· 2.0.5", f"· {v}").replace("· 2.0.6", f"· {v}").replace("· 2.0.7", f"· {v}").replace("· 2.0.8", f"· {v}").replace("· 2.0.9", f"· {v}").replace("· 2.0.10", f"· {v}")
+    return html.replace("v1.0.0", f"v{v}").replace("v1.1.0", f"v{v}").replace("v1.2.0", f"v{v}").replace("v1.2.1", f"v{v}").replace("v2.0.0", f"v{v}").replace("v2.0.1", f"v{v}").replace("v2.0.2", f"v{v}").replace("v2.0.3", f"v{v}").replace("v2.0.4", f"v{v}").replace("v2.0.5", f"v{v}").replace("v2.0.6", f"v{v}").replace("v2.0.7", f"v{v}").replace("v2.0.8", f"v{v}").replace("v2.0.9", f"v{v}").replace("v2.0.10", f"v{v}").replace("v2.0.11", f"v{v}").replace("v2.0.12", f"v{v}").replace("v2.0.13", f"v{v}").replace("v2.0.14", f"v{v}").replace("v2.0.15", f"v{v}").replace("v2.0.16", f"v{v}").replace("v2.0.17", f"v{v}").replace("v3.0.0", f"v{v}").replace("· 1.0.0", f"· {v}").replace("· 1.1.0", f"· {v}").replace("· 1.2.0", f"· {v}").replace("· 1.2.1", f"· {v}").replace("· 2.0.0", f"· {v}").replace("· 2.0.1", f"· {v}").replace("· 2.0.2", f"· {v}").replace("· 2.0.3", f"· {v}").replace("· 2.0.4", f"· {v}").replace("· 2.0.5", f"· {v}").replace("· 2.0.6", f"· {v}").replace("· 2.0.7", f"· {v}").replace("· 2.0.8", f"· {v}").replace("· 2.0.9", f"· {v}").replace("· 2.0.10", f"· {v}").replace("· 2.0.11", f"· {v}")
 
 
 # ── Central: Announcements & Support ─────────────────────────────────────────
@@ -1696,22 +1940,71 @@ async def api_support_messages(_=Depends(require_auth)):
 async def api_support_send(request: Request, _=Depends(require_auth)):
     raise HTTPException(status_code=404, detail="این بخش در نسخه مستقل OXNET حذف شده است")
 
+
+def _not_found_html() -> HTMLResponse:
+    html = (
+        "<!DOCTYPE html><html lang='fa' dir='rtl'><head><meta charset='UTF-8'><title>404</title>"
+        "<style>body{font-family:system-ui,sans-serif;background:#F8FAFC;color:#0F172A;"
+        "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}"
+        ".b{text-align:center}.c{font-size:56px;font-weight:700;color:#94A3B8}"
+        "p{color:#64748B;margin-top:8px}</style></head><body><div class='b'><div class='c'>404</div>"
+        "<p>صفحه پیدا نشد</p></div></body></html>"
+    )
+    return HTMLResponse(content=html, status_code=404)
+
+
+def _inject_panel_base(html: str) -> str:
+    base = get_panel_base()
+    boot = "<script>window.OXNET_BASE=" + repr(base) + ";window.OXNET_LOGIN=" + repr(get_login_url()) + ";window.OXNET_DASH=" + repr(get_dashboard_url()) + ";</script>"
+    if "<head>" in html:
+        return html.replace("<head>", "<head>" + boot, 1)
+    return boot + html
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    if get_login_path():
+        return _not_found_html()
     if await is_valid_session(request.cookies.get(SESSION_COOKIE)):
-        return RedirectResponse(url="/dashboard")
-    return HTMLResponse(content=render_html(LOGIN_HTML))
+        return RedirectResponse(get_dashboard_url(), status_code=302)
+    return HTMLResponse(content=_inject_panel_base(render_html(LOGIN_HTML)))
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    if get_login_path():
+        return _not_found_html()
     if not await is_valid_session(request.cookies.get(SESSION_COOKIE)):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(get_login_url(), status_code=302)
     await ensure_default_link()
-    return HTMLResponse(content=render_html(DASHBOARD_HTML))
+    return HTMLResponse(content=_inject_panel_base(render_html(DASHBOARD_HTML)))
+
+
+@app.get("/{login_slug}/login", response_class=HTMLResponse)
+async def custom_login_page(login_slug: str, request: Request):
+    expected = get_login_path()
+    if not expected or normalize_login_path(login_slug) != expected:
+        return _not_found_html()
+    if await is_valid_session(request.cookies.get(SESSION_COOKIE)):
+        return RedirectResponse(get_dashboard_url(), status_code=302)
+    return HTMLResponse(content=_inject_panel_base(render_html(LOGIN_HTML)))
+
+
+@app.get("/{login_slug}/dashboard", response_class=HTMLResponse)
+async def custom_dashboard(login_slug: str, request: Request):
+    expected = get_login_path()
+    if not expected or normalize_login_path(login_slug) != expected:
+        return _not_found_html()
+    if not await is_valid_session(request.cookies.get(SESSION_COOKIE)):
+        return RedirectResponse(get_login_url(), status_code=302)
+    await ensure_default_link()
+    return HTMLResponse(content=_inject_panel_base(render_html(DASHBOARD_HTML)))
+
 
 @app.get("/test-ws", response_class=HTMLResponse)
 async def test_ws_redirect():
-    return HTMLResponse(content="<script>location.href='/dashboard'</script>")
+    return RedirectResponse(get_dashboard_url(), status_code=302)
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=CONFIG["port"], log_level="info", workers=1)
