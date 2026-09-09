@@ -102,6 +102,8 @@ async def load_state():
             SETTINGS.setdefault("cloudflare", {"domains": []})
             SETTINGS.setdefault("panel", {"domain": "", "login_path": ""})
             SETTINGS.setdefault("extra_domains", [])
+            SETTINGS.setdefault("railway_tcp", {"domain": "", "port": 0, "path_mode": "panel"})
+            SETTINGS.setdefault("reality", {"host": "", "port": 443, "pbk": "", "sid": "", "sni": "", "fp": "chrome", "spx": "/"})
             if "password_hash" in data:
                 AUTH["password_hash"] = data["password_hash"]
             logger.info(f"State loaded from JSON: {len(LINKS)} links, {len(SUBS)} subs")
@@ -145,6 +147,22 @@ SETTINGS: dict = {
     "panel": {"domain": "", "login_path": ""},
     "cloudflare": {"domains": []},
     "extra_domains": [],
+    # Railway TCP Proxy → public domain:port for VLESS WS without TLS
+    "railway_tcp": {
+        "domain": "",          # e.g. yamabiko.proxy.rlwy.net
+        "port": 0,             # e.g. 49391
+        "path_mode": "panel",  # panel = /ws/{path} | root = /
+    },
+    # VLESS Reality share-link params (client URI generation)
+    "reality": {
+        "host": "",            # IP or hostname (e.g. 66.33.22.241)
+        "port": 443,
+        "pbk": "",             # public key
+        "sid": "",             # short id
+        "sni": "",             # server name
+        "fp": "chrome",
+        "spx": "/",
+    },
     "smart_profiles": {
         "general": ["trojan-ws", "vless-ws", "xhttp-stream-up"],
         "mobile": ["trojan-ws", "vless-ws", "shadowsocks-tls"],
@@ -161,6 +179,8 @@ PROTOCOLS = (
     "trojan-ws",
     "trojan-xhttp-packet-up", "trojan-xhttp-stream-up",
     "shadowsocks-tls", "mtproto", "multi",
+    "vless-tcp",      # VLESS WS via Railway TCP Proxy (no TLS)
+    "vless-reality",  # VLESS Reality (TCP) share link
 )
 DEFAULT_PROTOCOL = "vless-ws"
 
@@ -463,6 +483,66 @@ def generate_share_link(uuid: str, host: str, remark: str = "OXNET", protocol: s
     # port 80 = plain HTTP / no TLS for clients that support it; 443 = TLS
     use_tls = int(port) != 80
     security = "tls" if use_tls else "none"
+
+    # ── VLESS via Railway TCP Proxy (WS, no TLS) ─────────────────────────────
+    # Example:
+    # vless://uuid@yamabiko.proxy.rlwy.net:49391?path=%2Fws%2Fxxx&security=none&encryption=none&type=ws#name
+    if protocol == "vless-tcp":
+        tcp = SETTINGS.get("railway_tcp") or {}
+        t_host = (link_obj.get("tcp_domain") or tcp.get("domain") or host or "").strip()
+        t_host = re.sub(r"^https?://", "", t_host, flags=re.I).split("/", 1)[0].strip()
+        try:
+            t_port = int(link_obj.get("tcp_port") or tcp.get("port") or 0)
+        except (TypeError, ValueError):
+            t_port = 0
+        if not t_port:
+            t_port = int(port) if port else 443
+        path_mode = str(link_obj.get("tcp_path_mode") or tcp.get("path_mode") or "panel").strip().lower()
+        if path_mode == "root":
+            wspath = "/"
+        else:
+            wspath = f"/ws/{public_path}"
+        params = {
+            "encryption": "none",
+            "security": "none",
+            "type": "ws",
+            "path": wspath,
+        }
+        query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params.items())
+        tag = remark or "OXNET-TCP"
+        return f"vless://{uuid}@{_uri_authority_host(t_host)}:{t_port}?{query}#{quote(tag)}"
+
+    # ── VLESS Reality (TCP) share link ───────────────────────────────────────
+    # Example:
+    # vless://uuid@IP:PORT?security=reality&encryption=none&pbk=...&fp=chrome&spx=%2F...&type=tcp&sni=...&sid=...#name
+    if protocol == "vless-reality":
+        r = SETTINGS.get("reality") or {}
+        r_host = (link_obj.get("reality_host") or r.get("host") or host or "").strip()
+        r_host = re.sub(r"^https?://", "", r_host, flags=re.I).split("/", 1)[0].strip()
+        try:
+            r_port = int(link_obj.get("reality_port") or r.get("port") or 443)
+        except (TypeError, ValueError):
+            r_port = 443
+        pbk = str(link_obj.get("reality_pbk") or r.get("pbk") or "").strip()
+        sid = str(link_obj.get("reality_sid") or r.get("sid") or "").strip()
+        sni = str(link_obj.get("reality_sni") or r.get("sni") or "").strip()
+        fp = str(link_obj.get("reality_fp") or r.get("fp") or "chrome").strip() or "chrome"
+        spx = str(link_obj.get("reality_spx") or r.get("spx") or "/").strip() or "/"
+        params = {
+            "security": "reality",
+            "encryption": "none",
+            "pbk": pbk,
+            "headerType": "",
+            "fp": fp,
+            "spx": spx,
+            "type": "tcp",
+            "sni": sni,
+            "sid": sid,
+        }
+        query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params.items())
+        tag = remark or "OXNET-Reality"
+        return f"vless://{uuid}@{_uri_authority_host(r_host)}:{r_port}?{query}#{quote(tag)}"
+
     if protocol == "shadowsocks-tls":
         import base64
         user = base64.urlsafe_b64encode(f"chacha20-ietf-poly1305:{uuid}".encode()).decode().rstrip("=")
@@ -876,6 +956,8 @@ async def get_stats(_=Depends(require_auth)):
             "xhttp": sum(1 for l in snap.values() if "xhttp" in str(l.get("protocol", ""))),
             "shadowsocks_tls": sum(1 for l in snap.values() if l.get("protocol") == "shadowsocks-tls"),
             "mtproto": sum(1 for l in snap.values() if l.get("protocol") == "mtproto"),
+            "vless_tcp": sum(1 for l in snap.values() if l.get("protocol") == "vless-tcp"),
+            "vless_reality": sum(1 for l in snap.values() if l.get("protocol") == "vless-reality"),
         },
         "top_links": sorted([
             {"label": l.get("label", ""), "protocol": l.get("protocol", DEFAULT_PROTOCOL), "used_bytes": l.get("used_bytes", 0)}
@@ -1323,6 +1405,13 @@ async def create_link(request: Request, _=Depends(require_auth)):
             "trojan-ws", "trojan-xhttp-packet-up", "trojan-xhttp-stream-up",
             "shadowsocks-tls",
         ]
+        # Include Railway TCP / Reality in multi only when settings are filled
+        tcp = SETTINGS.get("railway_tcp") or {}
+        if tcp.get("domain") and int(tcp.get("port") or 0) > 0:
+            multi_protocols.append("vless-tcp")
+        real = SETTINGS.get("reality") or {}
+        if real.get("host") and real.get("pbk"):
+            multi_protocols.append("vless-reality")
         sub = {
             "name": label,
             "desc": "Multi Protocol subscription",
@@ -1410,6 +1499,43 @@ async def create_link(request: Request, _=Depends(require_auth)):
         link_data["mtproto_manual_port"] = manual_port is not None
         link_data["mtproto_public_pending"] = False
 
+    # Optional per-link overrides for Railway TCP / Reality (fallback to SETTINGS)
+    if protocol == "vless-tcp":
+        if body.get("tcp_domain"):
+            link_data["tcp_domain"] = re.sub(r"^https?://", "", str(body.get("tcp_domain")).strip(), flags=re.I).split("/", 1)[0].strip()
+        if body.get("tcp_port") not in (None, "", 0, "0"):
+            try:
+                p = int(body.get("tcp_port"))
+                if 1 <= p <= 65535:
+                    link_data["tcp_port"] = p
+            except (TypeError, ValueError):
+                pass
+        if body.get("tcp_path_mode") in ("panel", "root"):
+            link_data["tcp_path_mode"] = body.get("tcp_path_mode")
+        tcp = SETTINGS.get("railway_tcp") or {}
+        if not (link_data.get("tcp_domain") or tcp.get("domain")):
+            raise HTTPException(status_code=400, detail="دامنه TCP Proxy در تنظیمات یا هنگام ساخت کانفیگ الزامی است")
+        if not (link_data.get("tcp_port") or tcp.get("port")):
+            raise HTTPException(status_code=400, detail="پورت TCP Proxy در تنظیمات یا هنگام ساخت کانفیگ الزامی است")
+
+    if protocol == "vless-reality":
+        for key in ("reality_host", "reality_pbk", "reality_sid", "reality_sni", "reality_fp", "reality_spx"):
+            if body.get(key):
+                link_data[key] = str(body.get(key)).strip()
+        if body.get("reality_port") not in (None, "", 0, "0"):
+            try:
+                p = int(body.get("reality_port"))
+                if 1 <= p <= 65535:
+                    link_data["reality_port"] = p
+            except (TypeError, ValueError):
+                pass
+        r = SETTINGS.get("reality") or {}
+        host_ok = link_data.get("reality_host") or r.get("host")
+        pbk_ok = link_data.get("reality_pbk") or r.get("pbk")
+        if not host_ok:
+            raise HTTPException(status_code=400, detail="Host/IP Reality در تنظیمات یا هنگام ساخت کانفیگ الزامی است")
+        if not pbk_ok:
+            raise HTTPException(status_code=400, detail="Public Key (pbk) Reality در تنظیمات یا هنگام ساخت کانفیگ الزامی است")
 
     async with LINKS_LOCK:
         LINKS[uid] = link_data
@@ -1719,7 +1845,7 @@ async def api_settings(_=Depends(require_auth)):
 @app.patch("/api/settings")
 async def api_update_settings(request: Request, _=Depends(require_auth)):
     body = await request.json()
-    for section in ("theme", "security", "cleanup", "panel"):
+    for section in ("theme", "security", "cleanup", "panel", "railway_tcp", "reality"):
         if section in body and isinstance(body[section], dict):
             SETTINGS.setdefault(section, {}).update(body[section])
             if section == "panel":
@@ -1727,6 +1853,40 @@ async def api_update_settings(request: Request, _=Depends(require_auth)):
                     SETTINGS["panel"]["domain"] = _norm_domain(str(body["panel"].get("domain") or ""))
                 if "login_path" in body["panel"]:
                     SETTINGS["panel"]["login_path"] = normalize_login_path(str(body["panel"].get("login_path") or ""))
+            if section == "railway_tcp":
+                tcp = SETTINGS.setdefault("railway_tcp", {})
+                if "domain" in body["railway_tcp"]:
+                    dom = str(body["railway_tcp"].get("domain") or "").strip()
+                    dom = re.sub(r"^https?://", "", dom, flags=re.I).split("/", 1)[0].strip()
+                    tcp["domain"] = dom
+                if "port" in body["railway_tcp"]:
+                    try:
+                        p = int(body["railway_tcp"].get("port") or 0)
+                    except (TypeError, ValueError):
+                        p = 0
+                    tcp["port"] = p if 0 <= p <= 65535 else 0
+                if "path_mode" in body["railway_tcp"]:
+                    mode = str(body["railway_tcp"].get("path_mode") or "panel").strip().lower()
+                    tcp["path_mode"] = mode if mode in ("panel", "root") else "panel"
+            if section == "reality":
+                real = SETTINGS.setdefault("reality", {})
+                if "host" in body["reality"]:
+                    h = str(body["reality"].get("host") or "").strip()
+                    h = re.sub(r"^https?://", "", h, flags=re.I).split("/", 1)[0].strip()
+                    real["host"] = h
+                if "port" in body["reality"]:
+                    try:
+                        p = int(body["reality"].get("port") or 443)
+                    except (TypeError, ValueError):
+                        p = 443
+                    real["port"] = p if 1 <= p <= 65535 else 443
+                for key in ("pbk", "sid", "sni", "fp", "spx"):
+                    if key in body["reality"]:
+                        real[key] = str(body["reality"].get(key) or "").strip()
+                if not real.get("fp"):
+                    real["fp"] = "chrome"
+                if not real.get("spx"):
+                    real["spx"] = "/"
     await save_state()
     log_activity("system", "تنظیمات پیشرفته ذخیره شد", "ok")
     return {
