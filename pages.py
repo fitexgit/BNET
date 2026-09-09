@@ -2063,8 +2063,8 @@ body{
           <div class="cm-field">
             <label>حالت Path</label>
             <select class="cm-input" id="nl-tcp-path-mode">
+              <option value="root" selected>ساده — / (پیشنهادی)</option>
               <option value="panel">پنل — /ws/{path}</option>
-              <option value="root">ساده — /</option>
             </select>
           </div>
         </div>
@@ -2731,13 +2731,13 @@ body{
 
     <div class="card" style="margin-top:16px">
       <div class="card-title"><i class="ti ti-route"></i> Railway TCP Proxy</div>
-      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>در پنل Railway بخش TCP Proxy را فعال کن؛ دامنه شبیه <b dir="ltr">*.proxy.rlwy.net</b> و یک پورت عمومی می‌گیری. این مقادیر برای کانفیگ‌های <b>VLESS TCP Proxy</b> و همچنین در Multi استفاده می‌شوند.</span></div>
-      <div class="fg"><label>دامنه TCP</label><input class="fi" id="tcp-domain" dir="ltr" placeholder="yamabiko.proxy.rlwy.net" style="width:100%"></div>
-      <div class="fg" style="margin-top:10px"><label>پورت TCP</label><input class="fi" id="tcp-port" type="number" min="1" max="65535" placeholder="49391" style="width:100%"></div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>در Railway بخش <b>TCP Proxy</b> را روشن کن. دامنه <b dir="ltr">*.proxy.rlwy.net</b> و پورت عمومی را اینجا بگذار. مهم: هدف TCP باید <b>پورت اپ</b> باشد (الان <b dir="ltr" id="tcp-app-port">—</b>) نه لزوماً 443. کانفیگ‌ها با <b dir="ltr">path=/</b> ساخته می‌شوند و UUID از هدر VLESS خوانده می‌شود.</span></div>
+      <div class="fg"><label>دامنه TCP</label><input class="fi" id="tcp-domain" dir="ltr" placeholder="shuttle.proxy.rlwy.net" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>پورت TCP عمومی</label><input class="fi" id="tcp-port" type="number" min="1" max="65535" placeholder="59740" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>حالت Path</label>
         <select class="fi" id="tcp-path-mode" style="width:100%">
-          <option value="panel">پنل — /ws/{path} (سازگار با رله OXNET)</option>
-          <option value="root">ساده — / (مثل نمونه خام ریلوی)</option>
+          <option value="root" selected>ساده — / (پیشنهادی · مثل نمونه کارکننده)</option>
+          <option value="panel">پنل — /ws/{path}</option>
         </select>
       </div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
@@ -2747,15 +2747,16 @@ body{
 
     <div class="card" style="margin-top:16px">
       <div class="card-title"><i class="ti ti-shield-lock"></i> VLESS Reality</div>
-      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>پارامترهای لینک Reality (pbk، sid، sni، host/ip، پورت). برای ساخت کانفیگ Reality و افزودن به Multi. این بخش فقط لینک اشتراک می‌سازد.</span></div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>فقط <b>Host/IP</b> و <b>پورت</b> را دستی وارد کن. بقیه (pbk، sid، sni، spx) با دکمه تولید تصادفی ساخته می‌شوند. لینک برای کلاینت است؛ سرور Reality (مثلاً Xray) باید همان کلیدها را داشته باشد.</span></div>
       <div class="fg"><label>Host / IP</label><input class="fi" id="reality-host" dir="ltr" placeholder="66.33.22.241" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>پورت</label><input class="fi" id="reality-port" type="number" min="1" max="65535" placeholder="443" style="width:100%"></div>
-      <div class="fg" style="margin-top:10px"><label>Public Key (pbk)</label><input class="fi" id="reality-pbk" dir="ltr" placeholder="eXooS5KoWw6GQpZ7..." style="width:100%"></div>
-      <div class="fg" style="margin-top:10px"><label>Short ID (sid)</label><input class="fi" id="reality-sid" dir="ltr" placeholder="51ea838b11" style="width:100%"></div>
-      <div class="fg" style="margin-top:10px"><label>SNI</label><input class="fi" id="reality-sni" dir="ltr" placeholder="eventapi.semiconductor.samsung.com" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>Public Key (pbk)</label><input class="fi" id="reality-pbk" dir="ltr" placeholder="خودکار" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>Short ID (sid)</label><input class="fi" id="reality-sid" dir="ltr" placeholder="خودکار" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>SNI</label><input class="fi" id="reality-sni" dir="ltr" placeholder="خودکار" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>Fingerprint (fp)</label><input class="fi" id="reality-fp" dir="ltr" placeholder="chrome" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>SpiderX (spx)</label><input class="fi" id="reality-spx" dir="ltr" placeholder="/" style="width:100%"></div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-o btn-sm" type="button" onclick="generateRealityParams()"><i class="ti ti-dice"></i> تولید تصادفی pbk/sid/sni</button>
         <button class="btn btn-p btn-sm" type="button" onclick="saveRealitySettings()"><i class="ti ti-device-floppy"></i> ذخیره Reality</button>
       </div>
     </div>
@@ -3735,7 +3736,8 @@ function loadTcpRealitySettings(d){
     const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=(v==null||v===0)?'':v;};
     set('tcp-domain',tcp.domain||'');
     set('tcp-port',tcp.port||'');
-    const pm=document.getElementById('tcp-path-mode'); if(pm) pm.value=tcp.path_mode||'panel';
+    const pm=document.getElementById('tcp-path-mode'); if(pm) pm.value=tcp.path_mode||'root';
+    const ap=document.getElementById('tcp-app-port'); if(ap) ap.textContent=String(d.app_port||'—');
     set('reality-host',real.host||'');
     set('reality-port',real.port||'');
     set('reality-pbk',real.pbk||'');
@@ -3748,7 +3750,7 @@ function loadTcpRealitySettings(d){
 async function saveRailwayTcp(){
   const domain=(document.getElementById('tcp-domain').value||'').trim();
   const port=Number(document.getElementById('tcp-port').value||0);
-  const path_mode=document.getElementById('tcp-path-mode').value||'panel';
+  const path_mode=document.getElementById('tcp-path-mode').value||'root';
   try{
     const r=await authF('/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({railway_tcp:{domain,port,path_mode}})});
     const d=await r.json().catch(()=>({}));
@@ -3771,6 +3773,18 @@ async function saveRealitySettings(){
     if(!r.ok) throw new Error(d.detail||'خطا');
     toast('تنظیمات Reality ذخیره شد','ok');
     loadTcpRealitySettings(d);
+  }catch(e){toast(String(e.message||e),'err')}
+}
+async function generateRealityParams(){
+  try{
+    const r=await authF('/api/settings/reality/generate',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.detail||'خطا');
+    loadTcpRealitySettings({settings:{reality:d.reality||{},railway_tcp:(window.__lastSettings&&window.__lastSettings.railway_tcp)||{}},app_port:d.app_port});
+    // reload full settings for consistency
+    const r2=await authF('/api/settings'); const full=await r2.json();
+    loadTcpRealitySettings(full);
+    toast('pbk / sid / sni به‌صورت تصادفی ساخته شد','ok');
   }catch(e){toast(String(e.message||e),'err')}
 }
 
