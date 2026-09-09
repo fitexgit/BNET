@@ -116,6 +116,14 @@ async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: 
     except Exception:
         pass
 
+def uuid_from_vless_header(chunk: bytes) -> str | None:
+    """Extract UUID from VLESS request header (version + 16-byte UUID)."""
+    if not chunk or len(chunk) < 17:
+        return None
+    h = chunk[1:17].hex()
+    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+
 async def websocket_tunnel(ws: WebSocket, uuid: str):
     await ws.accept()
     uid = await resolve_link_id(uuid)
@@ -205,3 +213,105 @@ async def websocket_tunnel(ws: WebSocket, uuid: str):
                 pass
         connections.pop(conn_id, None)
         logger.info(f" WS closed [{conn_id}] total={len(connections)}")
+
+
+async def websocket_tunnel_root(ws: WebSocket):
+    """
+    Railway TCP Proxy style: client connects with path=/ and UUID lives in VLESS header.
+    Matches configs like:
+      vless://uuid@*.proxy.rlwy.net:PORT?encryption=none&security=none&type=ws&path=%2F
+    """
+    await ws.accept()
+    ip = _ws_client_ip(ws)
+    conn_id = secrets.token_urlsafe(6)
+    writer = None
+    uid = None
+
+    try:
+        first_msg = await asyncio.wait_for(ws.receive(), timeout=15.0)
+        if first_msg["type"] == "websocket.disconnect":
+            return
+        first_chunk = first_msg.get("bytes") or (first_msg.get("text") or "").encode()
+        if not first_chunk:
+            await ws.close(code=1008, reason="empty")
+            return
+
+        header_uuid = uuid_from_vless_header(first_chunk)
+        if not header_uuid:
+            logger.warning(f" WS / rejected ip={ip} (no UUID in VLESS header)")
+            await ws.close(code=1008, reason="bad header")
+            return
+
+        uid = await resolve_link_id(header_uuid)
+        async with LINKS_LOCK:
+            link = LINKS.get(uid) if uid else None
+        if not is_link_allowed(link):
+            logger.warning(f" WS / rejected uuid={header_uuid[:8]}… ip={ip} (not allowed)")
+            await ws.close(code=1008, reason="not authorized")
+            return
+
+        connections[conn_id] = {
+            "uuid": uid,
+            "ip": ip,
+            "transport": "vless-tcp",
+            "connected_at": datetime.now().isoformat(),
+            "bytes": 0,
+        }
+        logger.info(f" WS/ [{conn_id}] uuid={uid[:8]}… ip={ip} total={len(connections)}")
+        log_activity("connection", f"اتصال TCP Proxy از {ip} (کانفیگ {link.get('label','?')})", "info")
+
+        command, address, port, payload = await parse_vless_header(first_chunk)
+        if not await check_and_use(uid, len(first_chunk)):
+            await ws.close(code=1008, reason="quota/disabled")
+            return
+
+        stats["total_requests"] += 1
+        connections[conn_id]["bytes"] += len(first_chunk)
+        logger.info(f"️  [{conn_id}] → {address}:{port}")
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(address, port),
+            timeout=10.0
+        )
+        sock = writer.transport.get_extra_info("socket")
+        if sock:
+            import socket
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        if payload:
+            writer.write(payload)
+            await writer.drain()
+
+        done, pending = await asyncio.wait(
+            {
+                asyncio.create_task(relay_ws_to_tcp(ws, writer, conn_id, uid)),
+                asyncio.create_task(relay_tcp_to_ws(ws, reader, conn_id, uid)),
+            },
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        asyncio.create_task(save_state())
+
+    except WebSocketDisconnect:
+        pass
+    except asyncio.TimeoutError:
+        stats["total_errors"] += 1
+        error_logs.append({"error": "tcp-proxy connection timeout", "time": datetime.now().isoformat()})
+    except Exception as exc:
+        stats["total_errors"] += 1
+        error_logs.append({"error": f"tcp-proxy: {exc}", "time": datetime.now().isoformat()})
+        logger.error(f"WS/ error [{conn_id}]: {exc}")
+    finally:
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+        connections.pop(conn_id, None)
+        logger.info(f" WS/ closed [{conn_id}] total={len(connections)}")
