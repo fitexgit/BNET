@@ -1,3 +1,3 @@
-version=3.1.0
-description=VLESS Railway TCP Proxy + VLESS Reality configs, settings, multi support
-updated_at=1788930000
+version=3.1.1
+description=Fix Railway TCP path=/ with VLESS header UUID auth; WS routes; Reality auto-gen keys
+updated_at=1788932000
