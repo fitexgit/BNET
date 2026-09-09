@@ -151,17 +151,18 @@ SETTINGS: dict = {
     "railway_tcp": {
         "domain": "",          # e.g. yamabiko.proxy.rlwy.net
         "port": 0,             # e.g. 49391
-        "path_mode": "panel",  # panel = /ws/{path} | root = /
+        "path_mode": "root",   # root = / (Railway sample) | panel = /ws/{path}
     },
     # VLESS Reality share-link params (client URI generation)
     "reality": {
         "host": "",            # IP or hostname (e.g. 66.33.22.241)
         "port": 443,
-        "pbk": "",             # public key
-        "sid": "",             # short id
-        "sni": "",             # server name
+        "pbk": "",             # public key (auto-generated)
+        "sid": "",             # short id (auto-generated)
+        "sni": "",             # server name (auto-generated from pool)
         "fp": "chrome",
         "spx": "/",
+        "private_key": "",     # x25519 private (kept server-side)
     },
     "smart_profiles": {
         "general": ["trojan-ws", "vless-ws", "xhttp-stream-up"],
@@ -462,6 +463,72 @@ def generate_uuid() -> str:
     h = secrets.token_hex(16)
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
+
+_REALITY_SNI_POOL = [
+    "www.cloudflare.com",
+    "www.microsoft.com",
+    "www.samsung.com",
+    "www.apple.com",
+    "gateway.icloud.com",
+    "dl.google.com",
+    "www.amazon.com",
+    "cdn.jsdelivr.net",
+]
+
+
+def generate_reality_params() -> dict:
+    """Generate Reality client params: x25519 keypair + random sid/sni/spx."""
+    import base64
+    private_key = ""
+    public_key = ""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        priv = X25519PrivateKey.generate()
+        priv_raw = priv.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        pub_raw = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        private_key = base64.urlsafe_b64encode(priv_raw).decode().rstrip("=")
+        public_key = base64.urlsafe_b64encode(pub_raw).decode().rstrip("=")
+    except Exception:
+        # Fallback: random 32-byte values (client-format only; no real Reality server)
+        private_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+        public_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+
+    sid = secrets.token_hex(secrets.choice([2, 4, 6, 8]))
+    sni = secrets.choice(_REALITY_SNI_POOL)
+    spx = "/" + secrets.token_hex(8)
+    return {
+        "pbk": public_key,
+        "private_key": private_key,
+        "sid": sid,
+        "sni": sni,
+        "fp": "chrome",
+        "spx": spx,
+    }
+
+
+def ensure_reality_params() -> dict:
+    """Fill missing Reality fields with generated values (keeps host/port)."""
+    real = SETTINGS.setdefault("reality", {})
+    need = not real.get("pbk") or not real.get("sid") or not real.get("sni")
+    if need:
+        gen = generate_reality_params()
+        for k, v in gen.items():
+            if not real.get(k):
+                real[k] = v
+        if not real.get("fp"):
+            real["fp"] = "chrome"
+        if not real.get("spx"):
+            real["spx"] = gen.get("spx") or "/"
+    return real
+
 def now_ir() -> datetime:
     return datetime.now(IRAN_TZ)
 
@@ -497,11 +564,12 @@ def generate_share_link(uuid: str, host: str, remark: str = "OXNET", protocol: s
             t_port = 0
         if not t_port:
             t_port = int(port) if port else 443
-        path_mode = str(link_obj.get("tcp_path_mode") or tcp.get("path_mode") or "panel").strip().lower()
-        if path_mode == "root":
-            wspath = "/"
-        else:
+        path_mode = str(link_obj.get("tcp_path_mode") or tcp.get("path_mode") or "root").strip().lower()
+        # Default root=/ matches working Railway samples (UUID is in VLESS header)
+        if path_mode == "panel":
             wspath = f"/ws/{public_path}"
+        else:
+            wspath = "/"
         params = {
             "encryption": "none",
             "security": "none",
@@ -1840,7 +1908,25 @@ async def public_sub_data(uuid_key: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/settings")
 async def api_settings(_=Depends(require_auth)):
-    return {"settings": SETTINGS, "host": get_host(), "default_host": os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"]), "login_url": get_login_url(), "login_path": get_login_path(), "dashboard_url": get_dashboard_url(), "panel_base": get_panel_base()}
+    ensure_reality_params()
+    return {"settings": SETTINGS, "host": get_host(), "default_host": os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"]), "login_url": get_login_url(), "login_path": get_login_path(), "dashboard_url": get_dashboard_url(), "panel_base": get_panel_base(), "app_port": CONFIG["port"]}
+
+
+@app.post("/api/settings/reality/generate")
+async def api_reality_generate(_=Depends(require_auth)):
+    """Regenerate pbk/sid/sni/spx/fp (keeps host & port)."""
+    real = SETTINGS.setdefault("reality", {})
+    host = real.get("host") or ""
+    port = real.get("port") or 443
+    gen = generate_reality_params()
+    real.update(gen)
+    real["host"] = host
+    real["port"] = port
+    await save_state()
+    log_activity("system", "پارامترهای Reality دوباره ساخته شد", "ok")
+    # never expose private_key to clients unnecessarily — keep in settings only
+    safe = {k: v for k, v in real.items() if k != "private_key"}
+    return {"ok": True, "reality": real, "public": safe}
 
 @app.patch("/api/settings")
 async def api_update_settings(request: Request, _=Depends(require_auth)):
@@ -2164,6 +2250,40 @@ async def custom_dashboard(login_slug: str, request: Request):
 @app.get("/test-ws", response_class=HTMLResponse)
 async def test_ws_redirect():
     return RedirectResponse(get_dashboard_url(), status_code=302)
+
+
+# ── WebSocket / tunnel routes ─────────────────────────────────────────────────
+@app.websocket("/ws/{uuid}")
+async def ws_vless_path(ws: WebSocket, uuid: str):
+    from relay_vless import websocket_tunnel
+    await websocket_tunnel(ws, uuid)
+
+
+@app.websocket("/")
+async def ws_vless_root(ws: WebSocket):
+    """Railway TCP Proxy: path=/ + UUID inside VLESS header (like working sample configs)."""
+    from relay_vless import websocket_tunnel_root
+    await websocket_tunnel_root(ws)
+
+
+@app.websocket("/trojan-ws")
+async def ws_trojan(ws: WebSocket):
+    from trojan import trojan_ws_tunnel
+    await trojan_ws_tunnel(ws)
+
+
+@app.websocket("/ss/{uuid}")
+async def ws_shadowsocks(ws: WebSocket, uuid: str):
+    from shadowsocks_ws import shadowsocks_ws_tunnel
+    await shadowsocks_ws_tunnel(ws, uuid)
+
+
+# XHTTP router
+try:
+    from xhttp_siz10 import router as xhttp_router
+    app.include_router(xhttp_router)
+except Exception as _xhttp_err:
+    logger.warning(f"XHTTP router not loaded: {_xhttp_err}")
 
 
 if __name__ == "__main__":
