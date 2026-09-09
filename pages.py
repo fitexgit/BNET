@@ -1967,6 +1967,20 @@ body{
                 <div class="cm-opt-desc">پروکسی تلگرام روی پورت داخلی</div>
               </div>
             </div>
+            <div class="cm-opt" data-base="vless-tcp" onclick="cmSelectBase('vless-tcp',this)">
+              <div class="cm-opt-radio"></div>
+              <div class="cm-opt-body">
+                <div class="cm-opt-row"><span class="cm-opt-title">VLESS TCP Proxy</span><span class="cm-opt-tag">Railway</span></div>
+                <div class="cm-opt-desc">دامنه و پورت TCP Proxy ریلوی · بدون TLS</div>
+              </div>
+            </div>
+            <div class="cm-opt" data-base="vless-reality" onclick="cmSelectBase('vless-reality',this)">
+              <div class="cm-opt-radio"></div>
+              <div class="cm-opt-body">
+                <div class="cm-opt-row"><span class="cm-opt-title">VLESS Reality</span><span class="cm-opt-tag">TCP</span></div>
+                <div class="cm-opt-desc">Reality با pbk / sid / sni</div>
+              </div>
+            </div>
             </div></div></div>
           </div>
         </div>
@@ -2009,6 +2023,8 @@ body{
 
         <div class="cm-note" style="margin-top:12px" id="transport-note"><i class="ti ti-info-circle"></i> پروتکل و ترابرد پس از ساخت کانفیگ قابل تغییر نیستند.</div>
         <div class="cm-note" style="margin-top:12px;display:none" id="mtproto-note"><i class="ti ti-brand-telegram"></i> Telegram Proxy روی پورت داخلی پنل ساخته می‌شود. ابزار پروکسی Railway از این نسخه حذف شده است.</div>
+        <div class="cm-note" style="margin-top:12px;display:none" id="tcp-note"><i class="ti ti-route"></i> از دامنه و پورت TCP Proxy ریلوی استفاده می‌شود. مقادیر پیش‌فرض از <b>تنظیمات</b> خوانده می‌شوند؛ اینجا می‌توانی برای همین کانفیگ override بگذاری.</div>
+        <div class="cm-note" style="margin-top:12px;display:none" id="reality-note"><i class="ti ti-shield-lock"></i> لینک Reality با پارامترهای pbk/sid/sni ساخته می‌شود. مقادیر پیش‌فرض از <b>تنظیمات</b>؛ اینجا override اختیاری است.</div>
 
         <div class="cm-section" id="mtproto-port-field" style="display:none;margin-bottom:0">
           <div class="cm-row2">
@@ -2030,6 +2046,63 @@ body{
           <div class="cm-note" style="margin-top:0">
             <i class="ti ti-info-circle"></i>
             پورت خالی = یک پورت آزاد از بازه‌ی ۸۵۰۰–۸۶۰۰ خودکار انتخاب می‌شود. Fake SNI دامنه‌ای است که ترافیک پروکسی پشت آن پنهان می‌شود؛ می‌تونی خودت هر دامنه‌ای بذاری، پیش‌فرض پیشنهادی <b>www.cloudflare.com</b> است.
+          </div>
+        </div>
+
+        <div class="cm-section" id="tcp-proxy-field" style="display:none;margin-bottom:0">
+          <div class="cm-row2">
+            <div class="cm-field">
+              <label>دامنه TCP Proxy</label>
+              <input class="cm-input" id="nl-tcp-domain" dir="ltr" placeholder="yamabiko.proxy.rlwy.net">
+            </div>
+            <div class="cm-field">
+              <label>پورت TCP</label>
+              <input class="cm-input" id="nl-tcp-port" type="number" min="1" max="65535" placeholder="49391">
+            </div>
+          </div>
+          <div class="cm-field">
+            <label>حالت Path</label>
+            <select class="cm-input" id="nl-tcp-path-mode">
+              <option value="panel">پنل — /ws/{path}</option>
+              <option value="root">ساده — /</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="cm-section" id="reality-field" style="display:none;margin-bottom:0">
+          <div class="cm-row2">
+            <div class="cm-field">
+              <label>Host / IP</label>
+              <input class="cm-input" id="nl-reality-host" dir="ltr" placeholder="66.33.22.241">
+            </div>
+            <div class="cm-field">
+              <label>پورت</label>
+              <input class="cm-input" id="nl-reality-port" type="number" min="1" max="65535" placeholder="443">
+            </div>
+          </div>
+          <div class="cm-field">
+            <label>Public Key (pbk)</label>
+            <input class="cm-input" id="nl-reality-pbk" dir="ltr" placeholder="eXooS5Ko...">
+          </div>
+          <div class="cm-row2">
+            <div class="cm-field">
+              <label>Short ID (sid)</label>
+              <input class="cm-input" id="nl-reality-sid" dir="ltr" placeholder="51ea838b11">
+            </div>
+            <div class="cm-field">
+              <label>SNI</label>
+              <input class="cm-input" id="nl-reality-sni" dir="ltr" placeholder="eventapi.semiconductor.samsung.com">
+            </div>
+          </div>
+          <div class="cm-row2">
+            <div class="cm-field">
+              <label>Fingerprint (fp)</label>
+              <input class="cm-input" id="nl-reality-fp" dir="ltr" placeholder="chrome" value="chrome">
+            </div>
+            <div class="cm-field">
+              <label>SpiderX (spx)</label>
+              <input class="cm-input" id="nl-reality-spx" dir="ltr" placeholder="/" value="/">
+            </div>
           </div>
         </div>
 
@@ -2246,6 +2319,8 @@ body{
 
   <div class="proto-strip">
     <div class="proto-chip-v2"><i class="ti ti-bolt"></i> VLESS WS</div>
+    <div class="proto-chip-v2"><i class="ti ti-route"></i> TCP Proxy</div>
+    <div class="proto-chip-v2"><i class="ti ti-shield-lock"></i> Reality</div>
     <div class="proto-chip-v2"><i class="ti ti-shield-lock"></i> Trojan WS</div>
     <div class="proto-chip-v2"><i class="ti ti-lock"></i> Shadowsocks TLS</div>
     <div class="proto-chip-v2"><i class="ti ti-package"></i> XHTTP</div>
@@ -2653,6 +2728,38 @@ body{
         <button class="btn btn-o btn-sm" type="button" onclick="clearLoginPath()"><i class="ti ti-refresh"></i> بازگشت به /login</button>
       </div>
     </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><i class="ti ti-route"></i> Railway TCP Proxy</div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>در پنل Railway بخش TCP Proxy را فعال کن؛ دامنه شبیه <b dir="ltr">*.proxy.rlwy.net</b> و یک پورت عمومی می‌گیری. این مقادیر برای کانفیگ‌های <b>VLESS TCP Proxy</b> و همچنین در Multi استفاده می‌شوند.</span></div>
+      <div class="fg"><label>دامنه TCP</label><input class="fi" id="tcp-domain" dir="ltr" placeholder="yamabiko.proxy.rlwy.net" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>پورت TCP</label><input class="fi" id="tcp-port" type="number" min="1" max="65535" placeholder="49391" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>حالت Path</label>
+        <select class="fi" id="tcp-path-mode" style="width:100%">
+          <option value="panel">پنل — /ws/{path} (سازگار با رله OXNET)</option>
+          <option value="root">ساده — / (مثل نمونه خام ریلوی)</option>
+        </select>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-p btn-sm" type="button" onclick="saveRailwayTcp()"><i class="ti ti-device-floppy"></i> ذخیره TCP Proxy</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><i class="ti ti-shield-lock"></i> VLESS Reality</div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>پارامترهای لینک Reality (pbk، sid، sni، host/ip، پورت). برای ساخت کانفیگ Reality و افزودن به Multi. این بخش فقط لینک اشتراک می‌سازد.</span></div>
+      <div class="fg"><label>Host / IP</label><input class="fi" id="reality-host" dir="ltr" placeholder="66.33.22.241" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>پورت</label><input class="fi" id="reality-port" type="number" min="1" max="65535" placeholder="443" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>Public Key (pbk)</label><input class="fi" id="reality-pbk" dir="ltr" placeholder="eXooS5KoWw6GQpZ7..." style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>Short ID (sid)</label><input class="fi" id="reality-sid" dir="ltr" placeholder="51ea838b11" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>SNI</label><input class="fi" id="reality-sni" dir="ltr" placeholder="eventapi.semiconductor.samsung.com" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>Fingerprint (fp)</label><input class="fi" id="reality-fp" dir="ltr" placeholder="chrome" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>SpiderX (spx)</label><input class="fi" id="reality-spx" dir="ltr" placeholder="/" style="width:100%"></div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-p btn-sm" type="button" onclick="saveRealitySettings()"><i class="ti ti-device-floppy"></i> ذخیره Reality</button>
+      </div>
+    </div>
+
     <div class="pw-panel">
       <div class="pw-hero">
         <div class="pw-hero-icon"><i class="ti ti-key"></i></div>
@@ -2984,8 +3091,10 @@ const BASE_INFO = {
   vless:    { icon:'ti-bolt',           title:'VLESS',          desc:'سبک، سریع و پرکاربردترین گزینه' },
   trojan:   { icon:'ti-shield-lock',    title:'Trojan',         desc:'شبیه‌سازی ترافیک HTTPS معمولی' },
   telproxy: { icon:'ti-brand-telegram', title:'Telegram Proxy', desc:'پروکسی MTProto مستقیم روی یک پورت TCP اختصاصی' },
-  multi:    { icon:'ti-layers-intersect', title:'Multi Protocol', desc:'یک ساب شامل همه پروتکل‌ها، بدون پروکسی تلگرام' },
-  shadowsocks: { icon:'ti-lock-bolt', title:'Shadowsocks TLS', desc:'شادوساکس روی TLS/WebSocket با مسیر اختصاصی' }
+  multi:    { icon:'ti-layers-intersect', title:'Multi Protocol', desc:'یک ساب شامل همه پروتکل‌ها + TCP/Reality' },
+  shadowsocks: { icon:'ti-lock-bolt', title:'Shadowsocks TLS', desc:'شادوساکس روی TLS/WebSocket با مسیر اختصاصی' },
+  'vless-tcp': { icon:'ti-route', title:'VLESS TCP Proxy', desc:'دامنه و پورت TCP Proxy ریلوی · بدون TLS' },
+  'vless-reality': { icon:'ti-shield-lock', title:'VLESS Reality', desc:'Reality با pbk / sid / sni' }
 };
 const TRANSPORT_INFO = {
   'ws':               { icon:'ti-link',    title:'WebSocket',            desc:'پایدار و سازگار با همه شرایط شبکه' },
@@ -3007,14 +3116,18 @@ function cmSelectBase(val, el){
   const transportSection = document.getElementById('transport-section');
   const normalNote = document.getElementById('transport-note');
   const mtNote = document.getElementById('mtproto-note');
+  const tcpNote = document.getElementById('tcp-note');
+  const realityNote = document.getElementById('reality-note');
   const portField = document.getElementById('mtproto-port-field');
+  const tcpField = document.getElementById('tcp-proxy-field');
+  const realityField = document.getElementById('reality-field');
+  const hideExtra = ()=>{show(mtNote,'none');show(tcpNote,'none');show(realityNote,'none');show(portField,'none');show(tcpField,'none');show(realityField,'none');};
   if (val === 'multi') {
     show(transportSection,'none');
     show(normalNote,'flex');
-    show(mtNote,'none');
-    show(portField,'none');
+    hideExtra();
     document.getElementById('cm-head-title').textContent = 'ساخت ساب مولتی پروتکل';
-    document.getElementById('cm-head-sub').textContent = 'همه پروتکل‌ها در یک ساب؛ پروکسی تلگرام جدا می‌ماند';
+    document.getElementById('cm-head-sub').textContent = 'همه پروتکل‌ها + TCP Proxy و Reality در یک ساب';
     document.getElementById('cm-submit-text').textContent = 'ساخت ساب مولتی';
     document.getElementById('cm-head-icon').innerHTML = '<i class="ti ti-layers-intersect"></i>';
     document.getElementById('nl-proto').value = 'multi';
@@ -3024,8 +3137,7 @@ function cmSelectBase(val, el){
   if (val === 'shadowsocks') {
     show(transportSection,'none');
     show(normalNote,'flex');
-    show(mtNote,'none');
-    show(portField,'none');
+    hideExtra();
     document.getElementById('cm-head-title').textContent = 'ساخت Shadowsocks TLS';
     document.getElementById('cm-head-sub').textContent = 'شادوساکس با TLS و مسیر اختصاصی';
     document.getElementById('cm-submit-text').textContent = 'ساخت Shadowsocks';
@@ -3033,9 +3145,36 @@ function cmSelectBase(val, el){
     document.getElementById('nl-proto').value = 'shadowsocks-tls';
     return;
   }
+  if (val === 'vless-tcp') {
+    show(transportSection,'none');
+    show(normalNote,'none');
+    hideExtra();
+    show(tcpNote,'flex');
+    show(tcpField,'block');
+    document.getElementById('cm-head-title').textContent = 'ساخت VLESS TCP Proxy';
+    document.getElementById('cm-head-sub').textContent = 'لینک روی دامنه و پورت TCP Proxy ریلوی · بدون TLS';
+    document.getElementById('cm-submit-text').textContent = 'ساخت TCP Proxy';
+    document.getElementById('cm-head-icon').innerHTML = '<i class="ti ti-route"></i>';
+    document.getElementById('nl-proto').value = 'vless-tcp';
+    return;
+  }
+  if (val === 'vless-reality') {
+    show(transportSection,'none');
+    show(normalNote,'none');
+    hideExtra();
+    show(realityNote,'flex');
+    show(realityField,'block');
+    document.getElementById('cm-head-title').textContent = 'ساخت VLESS Reality';
+    document.getElementById('cm-head-sub').textContent = 'لینک Reality با pbk / sid / sni';
+    document.getElementById('cm-submit-text').textContent = 'ساخت Reality';
+    document.getElementById('cm-head-icon').innerHTML = '<i class="ti ti-shield-lock"></i>';
+    document.getElementById('nl-proto').value = 'vless-reality';
+    return;
+  }
   if (val === 'telproxy') {
     show(transportSection,'none');
     show(normalNote,'none');
+    hideExtra();
     show(mtNote,'flex');
     show(portField,'block');
     document.getElementById('cm-head-title').textContent = 'ساخت پروکسی جدید';
@@ -3045,8 +3184,7 @@ function cmSelectBase(val, el){
   } else {
     show(transportSection,'');
     show(normalNote,'flex');
-    show(mtNote,'none');
-    show(portField,'none');
+    hideExtra();
     document.getElementById('cm-head-title').textContent = 'ساخت کانفیگ جدید';
     document.getElementById('cm-head-sub').textContent = 'تنظیمات کامل پروتکل، ترابرد و محدودیت‌ها در یک صفحه';
     document.getElementById('cm-submit-text').textContent = 'ساخت کانفیگ';
@@ -3123,11 +3261,28 @@ async function createLink(){
   if(cmBase==='multi') protocol='multi';
   if(cmBase==='telproxy') protocol='mtproto';
   if(cmBase==='shadowsocks') protocol='shadowsocks-tls';
+  if(cmBase==='vless-tcp') protocol='vless-tcp';
+  if(cmBase==='vless-reality') protocol='vless-reality';
   const isMt = protocol === 'mtproto';
   const mtproto_port = isMt ? (document.getElementById('nl-mtproto-port').value || null) : null;
   const mtproto_domain = isMt ? (document.getElementById('nl-mtproto-domain').value.trim() || null) : null;
+  const body={label,custom_path,limit_value:val||0,limit_unit:unit,expires_days:exp||0,note,sub_id,protocol,mtproto_port,mtproto_domain};
+  if(protocol==='vless-tcp'){
+    body.tcp_domain=(document.getElementById('nl-tcp-domain').value||'').trim()||null;
+    body.tcp_port=document.getElementById('nl-tcp-port').value||null;
+    body.tcp_path_mode=document.getElementById('nl-tcp-path-mode').value||'panel';
+  }
+  if(protocol==='vless-reality'){
+    body.reality_host=(document.getElementById('nl-reality-host').value||'').trim()||null;
+    body.reality_port=document.getElementById('nl-reality-port').value||null;
+    body.reality_pbk=(document.getElementById('nl-reality-pbk').value||'').trim()||null;
+    body.reality_sid=(document.getElementById('nl-reality-sid').value||'').trim()||null;
+    body.reality_sni=(document.getElementById('nl-reality-sni').value||'').trim()||null;
+    body.reality_fp=(document.getElementById('nl-reality-fp').value||'').trim()||'chrome';
+    body.reality_spx=(document.getElementById('nl-reality-spx').value||'').trim()||'/';
+  }
   try{
-    const r=await authF('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label,custom_path,limit_value:val||0,limit_unit:unit,expires_days:exp||0,note,sub_id,protocol,mtproto_port,mtproto_domain})});
+    const r=await authF('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!r.ok){
       const d=await r.json().catch(()=>({}));
       throw new Error(d.detail||'failed');
@@ -3135,8 +3290,14 @@ async function createLink(){
     const d=await r.json().catch(()=>({}));
     const copyTarget = d.sub_url || d.vless_link;
     if(copyTarget && navigator.clipboard) navigator.clipboard.writeText(copyTarget).catch(()=>{});
-    ['nl-label','nl-path','nl-val','nl-exp','nl-note','nl-mtproto-port','nl-mtproto-domain'].forEach(id=>document.getElementById(id).value='');
-    toast(protocol==='multi' ? 'ساب مولتی ساخته شد و لینک کپی شد' : (isMt ? 'پروکسی ساخته شد و لینک کپی شد' : (protocol==='shadowsocks-tls' ? 'Shadowsocks TLS ساخته شد و لینک کپی شد' : 'کانفیگ ساخته شد')),'ok');
+    ['nl-label','nl-path','nl-val','nl-exp','nl-note','nl-mtproto-port','nl-mtproto-domain','nl-tcp-domain','nl-tcp-port','nl-reality-host','nl-reality-port','nl-reality-pbk','nl-reality-sid','nl-reality-sni'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+    const msg = protocol==='multi' ? 'ساب مولتی ساخته شد و لینک کپی شد'
+      : isMt ? 'پروکسی ساخته شد و لینک کپی شد'
+      : protocol==='shadowsocks-tls' ? 'Shadowsocks TLS ساخته شد و لینک کپی شد'
+      : protocol==='vless-tcp' ? 'VLESS TCP Proxy ساخته شد و لینک کپی شد'
+      : protocol==='vless-reality' ? 'VLESS Reality ساخته شد و لینک کپی شد'
+      : 'کانفیگ ساخته شد';
+    toast(msg,'ok');
     closeModal('modal-create-link');
     loadLinks();
     if(protocol==='multi'){loadSubs();loadSubsPage();}
@@ -3561,7 +3722,56 @@ async function loadPanelDomain(){
     if(def) def.textContent=d.default_host||location.host;
     const sh=document.getElementById('set-host');
     if(sh) sh.textContent=d.host||location.host;
+    loadLoginPathSettings(d);
+    loadTcpRealitySettings(d);
   }catch(e){console.error(e)}
+}
+
+function loadTcpRealitySettings(d){
+  try{
+    const s=(d&&d.settings)||{};
+    const tcp=s.railway_tcp||{};
+    const real=s.reality||{};
+    const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=(v==null||v===0)?'':v;};
+    set('tcp-domain',tcp.domain||'');
+    set('tcp-port',tcp.port||'');
+    const pm=document.getElementById('tcp-path-mode'); if(pm) pm.value=tcp.path_mode||'panel';
+    set('reality-host',real.host||'');
+    set('reality-port',real.port||'');
+    set('reality-pbk',real.pbk||'');
+    set('reality-sid',real.sid||'');
+    set('reality-sni',real.sni||'');
+    set('reality-fp',real.fp||'chrome');
+    set('reality-spx',real.spx||'/');
+  }catch(e){}
+}
+async function saveRailwayTcp(){
+  const domain=(document.getElementById('tcp-domain').value||'').trim();
+  const port=Number(document.getElementById('tcp-port').value||0);
+  const path_mode=document.getElementById('tcp-path-mode').value||'panel';
+  try{
+    const r=await authF('/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({railway_tcp:{domain,port,path_mode}})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.detail||'خطا');
+    toast('تنظیمات Railway TCP Proxy ذخیره شد','ok');
+    loadTcpRealitySettings(d);
+  }catch(e){toast(String(e.message||e),'err')}
+}
+async function saveRealitySettings(){
+  const host=(document.getElementById('reality-host').value||'').trim();
+  const port=Number(document.getElementById('reality-port').value||443);
+  const pbk=(document.getElementById('reality-pbk').value||'').trim();
+  const sid=(document.getElementById('reality-sid').value||'').trim();
+  const sni=(document.getElementById('reality-sni').value||'').trim();
+  const fp=(document.getElementById('reality-fp').value||'').trim()||'chrome';
+  const spx=(document.getElementById('reality-spx').value||'').trim()||'/';
+  try{
+    const r=await authF('/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({reality:{host,port,pbk,sid,sni,fp,spx}})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.detail||'خطا');
+    toast('تنظیمات Reality ذخیره شد','ok');
+    loadTcpRealitySettings(d);
+  }catch(e){toast(String(e.message||e),'err')}
 }
 
 async function loadLoginPathSettings(d){
