@@ -1,3 +1,3 @@
-version=3.1.1
-description=Fix Railway TCP path=/ with VLESS header UUID auth; WS routes; Reality auto-gen keys
-updated_at=1788932000
+version=3.1.2
+description=Fix panel down: remove WS on / route, middleware for path=/, healthz
+updated_at=1788934000
