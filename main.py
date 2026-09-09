@@ -275,7 +275,7 @@ async def startup():
     await load_state()
     await _restart_mtproto_instances()
     log_activity("system", "سرور راه‌اندازی شد", "ok")
-    logger.info(f"OXNET v1.0.0 started on port {CONFIG['port']}")
+    logger.info(f"OXNET v{get_current_panel_version()} started on port {CONFIG['port']}")
 
 async def _restart_mtproto_instances():
     async with LINKS_LOCK:
@@ -773,8 +773,9 @@ async def root():
     return {"service": "OXNET", "version": get_current_panel_version(), "status": "active"}
 
 @app.get("/health")
+@app.get("/healthz")
 async def health():
-    return {"status": "ok", "connections": len(connections), "uptime": uptime()}
+    return {"status": "ok", "connections": len(connections), "uptime": uptime(), "version": get_current_panel_version()}
 
 # ── Subscription (single link) ────────────────────────────────────────────────
 @app.get("/sub/{uuid}")
@@ -2253,15 +2254,18 @@ async def test_ws_redirect():
 
 
 # ── WebSocket / tunnel routes ─────────────────────────────────────────────────
+# NOTE: Do NOT register @app.websocket("/") — it can break Railway HTTP health on "/".
+# Root path=/ is handled by VlessRootMiddleware below (websocket only).
+
 @app.websocket("/ws/{uuid}")
 async def ws_vless_path(ws: WebSocket, uuid: str):
     from relay_vless import websocket_tunnel
     await websocket_tunnel(ws, uuid)
 
 
-@app.websocket("/")
-async def ws_vless_root(ws: WebSocket):
-    """Railway TCP Proxy: path=/ + UUID inside VLESS header (like working sample configs)."""
+@app.websocket("/vless-tcp")
+async def ws_vless_tcp_alias(ws: WebSocket):
+    """Alias for TCP-proxy clients that use path=/vless-tcp."""
     from relay_vless import websocket_tunnel_root
     await websocket_tunnel_root(ws)
 
@@ -2284,6 +2288,28 @@ try:
     app.include_router(xhttp_router)
 except Exception as _xhttp_err:
     logger.warning(f"XHTTP router not loaded: {_xhttp_err}")
+
+
+class VlessRootMiddleware:
+    """
+    Accept WebSocket on path=/ (Railway TCP Proxy sample style) without
+    registering a FastAPI websocket route on "/" that can interfere with HTTP.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket" and scope.get("path") in ("/", ""):
+            from starlette.websockets import WebSocket as StarletteWebSocket
+            from relay_vless import websocket_tunnel_root
+            ws = StarletteWebSocket(scope, receive, send)
+            await websocket_tunnel_root(ws)
+            return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(VlessRootMiddleware)
 
 
 if __name__ == "__main__":
