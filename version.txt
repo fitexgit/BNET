@@ -1,3 +1,3 @@
-version=3.1.2
-description=Fix panel down: remove WS on / route, middleware for path=/, healthz
-updated_at=1788934000
+version=3.2.0
+description=Extra domain clean IP, volume data dir, sub disable kills configs, remark+info templates
+updated_at=1789100000
