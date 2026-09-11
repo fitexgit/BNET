@@ -26,7 +26,7 @@ logger = logging.getLogger("OXNET")
 
 IRAN_TZ = ZoneInfo("Asia/Tehran")
 
-app = FastAPI(title="OXNET", docs_url=None, redoc_url=None)
+app = FastAPI(title="OXNET Edge Console", docs_url=None, redoc_url=None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -973,12 +973,22 @@ async def ensure_default_link():
 # ── Basic endpoints ───────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
-    return {"service": "OXNET", "version": get_current_panel_version(), "status": "active"}
+    return {
+        "service": "OXNET Edge Console",
+        "product": "edge-delivery",
+        "version": get_current_panel_version(),
+        "status": "active",
+    }
 
 @app.get("/health")
 @app.get("/healthz")
 async def health():
-    return {"status": "ok", "connections": len(connections), "uptime": uptime(), "version": get_current_panel_version()}
+    return {
+        "status": "ok",
+        "sessions": len(connections),
+        "uptime": uptime(),
+        "version": get_current_panel_version(),
+    }
 
 # ── Subscription (single link) ────────────────────────────────────────────────
 @app.get("/sub/{uuid}")
