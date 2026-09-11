@@ -2556,9 +2556,10 @@ body{
   <div class="g2" style="margin-top:16px">
     <div class="card">
       <div class="card-title"><i class="ti ti-link"></i> دامنه فرعی</div>
-      <div class="cl" style="margin-top:0;margin-bottom:12px"><i class="ti ti-info-circle"></i><span>دامنه فرعی جدا از دامنه اصلی پنل و دامنه‌های Cloudflare است. برای ساخت ساب و کانفیگ با Host/SNI همین دامنه استفاده می‌شود (بدون IP تمیز).</span></div>
+      <div class="cl" style="margin-top:0;margin-bottom:12px"><i class="ti ti-info-circle"></i><span>دامنه فرعی جدا از دامنه اصلی و Cloudflare است. مثل کلادفلیر می‌توانی برای آن <b>IP یا دامنه تمیز</b> تعریف کنی؛ در ساب برای هر IP یک کانفیگ با SNI همان دامنه فرعی ساخته می‌شود.</span></div>
       <div class="fg"><label>دامنه فرعی</label><input class="fi" id="ex-domain" dir="ltr" placeholder="cdn2.example.com" style="width:100%"></div>
       <div class="fg" style="margin-top:12px"><label>نام نمایشی</label><input class="fi" id="ex-name" placeholder="CDN Secondary" style="width:100%"></div>
+      <div class="fg" style="margin-top:12px"><label>IP / دامنه تمیز</label><textarea class="fi" id="ex-ips" dir="ltr" placeholder="هر خط یک IP یا دامنه تمیز&#10;1.2.3.4&#10;clean.example.com" style="width:100%;min-height:120px"></textarea></div>
       <input type="hidden" id="ex-edit-key" value="">
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveExtraDomain()"><i class="ti ti-device-floppy"></i> ذخیره دامنه فرعی</button>
@@ -2727,6 +2728,20 @@ body{
         <button class="btn btn-p btn-sm" type="button" onclick="saveLoginPath()"><i class="ti ti-device-floppy"></i> ذخیره مسیر ورود</button>
         <button class="btn btn-o btn-sm" type="button" onclick="clearLoginPath()"><i class="ti ti-refresh"></i> بازگشت به /login</button>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><i class="ti ti-database"></i> ذخیره‌سازی دیتابیس</div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>برای اینکه بعد از Redeploy داده‌ها پاک نشوند، در Railway یک <b>Volume</b> بساز و روی مسیر <b dir="ltr">/data</b> مونت کن. مسیر فعلی: <b dir="ltr" id="data-dir-path">—</b> · پایدار: <b id="data-dir-ok">—</b></span></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><i class="ti ti-text-recognition"></i> نام کانفیگ‌ها و خطوط آماری</div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>متغیرها: <code dir="ltr">{label} {username} {status} {status_emoji} {remain_traffic} {total_traffic} {used_traffic} {remain_time} {remain_days} {protocol} {target} {domain} {cdn} {flag} {sub_name}</code></span></div>
+      <div class="fg"><label>قالب نام کانفیگ (remark)</label><input class="fi" id="remark-template" dir="ltr" placeholder="{status_emoji} {label} · {target}" style="width:100%"></div>
+      <div class="fg" style="margin-top:10px"><label>خطوط آماری (هر خط یک مورد)</label><textarea class="fi" id="info-templates" dir="ltr" style="width:100%;min-height:110px" placeholder="{status_emoji} وضعیت اشتراک: {status}"></textarea></div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px"><input type="checkbox" id="info-configs-enabled" checked> نمایش کانفیگ‌های آماری در ابتدای ساب</label>
+      <div style="margin-top:14px"><button class="btn btn-p btn-sm" type="button" onclick="saveRemarkTemplates()"><i class="ti ti-device-floppy"></i> ذخیره قالب‌ها</button></div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -3444,6 +3459,7 @@ function renderSubsGrid(subs){
       <div class="sub-card-bottom">
         <button class="btn btn-sm btn-g" onclick="openSubLinks('${esc(s.sub_id)}','${esc(s.name)}')"><i class="ti ti-link-plus"></i> کانفیگ‌ها</button>
         <button class="btn btn-sm btn-o" onclick="navigator.clipboard.writeText('${esc(s.sub_url)}').then(()=>toast('لینک ساب کپی شد','ok'))"><i class="ti ti-rss"></i> ساب</button>
+        <button class="btn btn-sm ${s.active===false?'btn-p':'btn-amber'}" onclick="toggleSubActive('${esc(s.sub_id)}', ${s.active===false?'true':'false'})" title="فعال/غیرفعال">${s.active===false?'<i class="ti ti-player-play"></i> فعال':'<i class="ti ti-player-pause"></i> قطع'}</button>
         <button class="btn btn-sm btn-g btn-icon" onclick="showQR('${esc(s.sub_url)}')" title="QR"><i class="ti ti-qrcode"></i></button>
         <button class="btn btn-sm btn-d btn-icon" onclick="deleteSub('${esc(s.sub_id)}')" title="حذف"><i class="ti ti-trash"></i></button>
       </div>
@@ -3676,29 +3692,32 @@ async function deleteCloudflareDomain(key){if(!confirm('دامنه کلادفل�
 async function loadExtraDomains(){
   try{
     const r=await authF('/api/extra-domains'); const d=await r.json();
-    const list=d.domains||[];
+    const list=d.domains||[]; window.__exDomains=list;
     document.getElementById('ex-count').textContent=toFa(list.length);
     document.getElementById('ex-list').innerHTML=list.map(x=>`<div class="row-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="flex:1;min-width:160px"><div style="font-weight:600">${esc(x.name||x.domain)}</div><div class="muted" dir="ltr" style="font-size:12px">${esc(x.domain)}</div></div>
+      <div style="flex:1;min-width:160px"><div style="font-weight:600">${esc(x.name||x.domain)}</div><div class="muted" dir="ltr" style="font-size:12px">${esc(x.domain)} · ${toFa((x.clean_ips||[]).length)} IP تمیز</div></div>
       <button class="btn btn-sm btn-g" onclick="navigator.clipboard.writeText('${esc(x.sub_url||'')}').then(()=>toast('ساب دامنه فرعی کپی شد','ok'))"><i class="ti ti-copy"></i> ساب</button>
-      <button class="btn btn-sm btn-g" onclick="editExtraDomain('${esc(x.slug||x.domain)}','${esc(x.domain)}','${esc(x.name||'')}')"><i class="ti ti-edit"></i></button>
+      <button class="btn btn-sm btn-g" onclick="editExtraDomain('${esc(x.id||x.slug||x.domain)}')"><i class="ti ti-edit"></i></button>
       <button class="btn btn-sm btn-d" onclick="deleteExtraDomain('${esc(x.slug||x.domain)}')"><i class="ti ti-trash"></i></button>
     </div>`).join('')||'<div class="empty"><i class="ti ti-link-off"></i><p>دامنه فرعی ثبت نشده</p></div>';
   }catch(e){console.error(e);toast('خطا در بارگذاری دامنه فرعی','err')}
 }
-function editExtraDomain(key,domain,name){
-  document.getElementById('ex-edit-key').value=key||'';
-  document.getElementById('ex-domain').value=domain||'';
-  document.getElementById('ex-name').value=name||'';
+function editExtraDomain(key){
+  const x=(window.__exDomains||[]).find(d=>d.id===key||d.slug===key||d.domain===key); if(!x)return;
+  document.getElementById('ex-edit-key').value=x.id||x.slug||x.domain||'';
+  document.getElementById('ex-domain').value=x.domain||'';
+  document.getElementById('ex-name').value=x.name||'';
+  const ips=document.getElementById('ex-ips'); if(ips) ips.value=(x.clean_ips||[]).join('\n');
   toast('دامنه فرعی برای ویرایش آماده شد','ok'); window.scrollTo({top:0,behavior:'smooth'});
 }
 async function saveExtraDomain(){
   const key=(document.getElementById('ex-edit-key').value||'').trim();
   const domain=(document.getElementById('ex-domain').value||'').trim();
   const name=(document.getElementById('ex-name').value||'').trim();
+  const clean_ips=(document.getElementById('ex-ips')?.value||'').trim();
   if(!domain){toast('دامنه فرعی را وارد کن','err');return}
   try{
-    const r=await authF('/api/extra-domains',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,domain,name})});
+    const r=await authF('/api/extra-domains',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,domain,name,clean_ips})});
     const d=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(d.detail||'خطا');
     navigator.clipboard?.writeText(d.sub_url||'');
@@ -3706,10 +3725,31 @@ async function saveExtraDomain(){
     document.getElementById('ex-edit-key').value='';
     document.getElementById('ex-domain').value='';
     document.getElementById('ex-name').value='';
+    const ips=document.getElementById('ex-ips'); if(ips) ips.value='';
     loadExtraDomains();
   }catch(e){toast(e.message||'خطا','err')}
 }
 async function deleteExtraDomain(key){if(!confirm('دامنه فرعی حذف شود؟'))return; try{await authF('/api/extra-domains/'+encodeURIComponent(key),{method:'DELETE'});toast('حذف شد','ok');loadExtraDomains()}catch(e){toast('خطا','err')}}
+
+async function saveRemarkTemplates(){
+  const remark_template=(document.getElementById('remark-template')?.value||'').trim();
+  const info_templates=(document.getElementById('info-templates')?.value||'');
+  const info_configs_enabled=!!(document.getElementById('info-configs-enabled')?.checked);
+  try{
+    const r=await authF('/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({remark_template,info_templates,info_configs_enabled})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.detail||'خطا');
+    toast('قالب نام کانفیگ و خطوط آماری ذخیره شد','ok');
+  }catch(e){toast(String(e.message||e),'err')}
+}
+async function toggleSubActive(sub_id, active){
+  try{
+    const r=await authF('/api/subs/'+sub_id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:!!active})});
+    if(!r.ok) throw new Error('خطا');
+    toast(active?'اشتراک فعال شد':'اشتراک غیرفعال شد و کانفیگ‌ها قطع شدند', active?'ok':'warn');
+    loadSubs(); loadLinks();
+  }catch(e){toast('خطا','err')}
+}
 
 async function loadPanelDomain(){
   try{
@@ -3717,6 +3757,11 @@ async function loadPanelDomain(){
     const panel=(d.settings&&d.settings.panel)||{};
     const inp=document.getElementById('panel-domain');
     if(inp) inp.value=panel.domain||'';
+    const dd=document.getElementById('data-dir-path'); if(dd) dd.textContent=d.data_dir||'—';
+    const dok=document.getElementById('data-dir-ok'); if(dok) dok.textContent=d.data_persistent?'بله (Volume)':'خیر — Volume روی /data بساز';
+    const rt=document.getElementById('remark-template'); if(rt) rt.value=(d.settings&&d.settings.remark_template)||'{status_emoji} {label} · {target}';
+    const it=document.getElementById('info-templates'); if(it) it.value=((d.settings&&d.settings.info_templates)||[]).join('\n');
+    const ice=document.getElementById('info-configs-enabled'); if(ice) ice.checked=d.settings?d.settings.info_configs_enabled!==false:true;
     const act=document.getElementById('panel-domain-active');
     const def=document.getElementById('panel-domain-default');
     if(act) act.textContent=d.host||location.host;
