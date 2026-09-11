@@ -1,3 +1,3 @@
-version=3.2.0
-description=Extra domain clean IP, volume data dir, sub disable kills configs, remark+info templates
-updated_at=1789100000
+version=3.2.1
+description=Edge Console branding (neutral wording), volume, clean IPs, remark templates
+updated_at=1789101000
