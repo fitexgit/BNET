@@ -37,11 +37,39 @@ app.add_middleware(
 )
 
 # ── Persistence ───────────────────────────────────────────────────────────────
-DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+def _resolve_data_dir() -> Path:
+    """
+    Prefer Railway Volume mount. Order:
+      1) DATA_DIR env
+      2) /data  (mount a Railway Volume here)
+      3) ./data next to the app
+      4) /tmp/oxnet-data (last resort — lost on redeploy)
+    """
+    candidates: list[Path] = []
+    env = (os.environ.get("DATA_DIR") or "").strip()
+    if env:
+        candidates.append(Path(env))
+    candidates.append(Path("/data"))
+    candidates.append(Path(__file__).resolve().parent / "data")
+    candidates.append(Path("/tmp/oxnet-data"))
+    for p in candidates:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".oxnet_write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return p
+        except Exception:
+            continue
+    return Path("/tmp/oxnet-data")
+
+
+DATA_DIR = _resolve_data_dir()
 DATA_FILE = DATA_DIR / "oxnet_state.json"
 SECRET_FILE = DATA_DIR / ".oxnet_secret"
 PANEL_VERSION_FILE = Path(__file__).with_name("version.txt")
 SAVE_LOCK = asyncio.Lock()
+logger.info(f"DATA_DIR={DATA_DIR} (mount a Volume on /data to survive redeploys)")
 
 
 def _get_or_create_secret() -> str:
@@ -170,7 +198,20 @@ SETTINGS: dict = {
         "mci": ["trojan-ws", "vless-ws"],
         "irancell": ["vless-ws", "trojan-ws", "xhttp-stream-up"],
         "wifi": ["xhttp-stream-up", "trojan-ws", "vless-ws"],
-    }
+    },
+    # نام کانفیگ‌ها در ساب (remark بعد از #)
+    # متغیرها: {label} {username} {status} {status_emoji} {remain_traffic} {total_traffic}
+    #          {used_traffic} {remain_time} {remain_days} {protocol} {target} {domain}
+    #          {cdn} {flag} {sub_name}
+    "remark_template": "{status_emoji} {label} · {target}",
+    # خطوط آماری بالای هر ساب (کانفیگ‌های نمایشی)
+    "info_templates": [
+        "{status_emoji} وضعیت اشتراک: {status}",
+        "👤 کاربر: {username}",
+        "📦 حجم باقیمانده: {remain_traffic} از {total_traffic}",
+        "⏰ زمان باقیمانده: {remain_time}",
+    ],
+    "info_configs_enabled": True,
 }
 FAILED_LOGINS: dict = {}
 
@@ -722,7 +763,169 @@ def is_link_allowed(link: dict | None) -> bool:
     lb = link.get("limit_bytes", 0)
     if lb > 0 and link.get("used_bytes", 0) >= lb:
         return False
+    # اگر به اشتراک وصل است: حذف یا غیرفعال بودن ساب = قطع کانفیگ
+    sub_id = link.get("sub_id")
+    if sub_id:
+        sub = SUBS.get(sub_id)
+        if sub is None:
+            return False
+        if sub.get("active", True) is False:
+            return False
     return True
+
+
+def _fmt_remain_time(link: dict) -> tuple[str, str]:
+    """Returns (remain_time_text, remain_days_text)."""
+    exp = link.get("expires_at")
+    if not exp:
+        return "∞", "∞"
+    try:
+        end = datetime.fromisoformat(exp)
+        if end.tzinfo is None:
+            now = datetime.now()
+        else:
+            now = datetime.now(end.tzinfo)
+        delta = end - now
+        if delta.total_seconds() <= 0:
+            return "منقضی", "0"
+        days = delta.days
+        hours = delta.seconds // 3600
+        if days > 0:
+            return f"{days} روز و {hours} ساعت", str(days)
+        mins = (delta.seconds % 3600) // 60
+        return f"{hours} ساعت و {mins} دقیقه", "0"
+    except Exception:
+        return "—", "—"
+
+
+def build_remark_context(
+    link: dict,
+    *,
+    target: str = "",
+    domain: str = "",
+    sub: dict | None = None,
+    cdn: bool = False,
+) -> dict:
+    label = str(link.get("label") or "کانفیگ")
+    username = str(
+        link.get("username")
+        or link.get("user")
+        or ((sub or {}).get("name") if sub else "")
+        or label
+    )
+    active = is_link_allowed(link)
+    status = "فعال" if active else "غیرفعال"
+    status_emoji = "🟢" if active else "🔴"
+    used = int(link.get("used_bytes") or 0)
+    limit = int(link.get("limit_bytes") or 0)
+    remain = max(limit - used, 0) if limit > 0 else -1
+    remain_traffic = "∞" if limit <= 0 else fmt_bytes(remain)
+    total_traffic = "∞" if limit <= 0 else fmt_bytes(limit)
+    used_traffic = fmt_bytes(used)
+    remain_time, remain_days = _fmt_remain_time(link)
+    proto = str(link.get("protocol") or DEFAULT_PROTOCOL)
+    tgt = target or domain or get_host()
+    return {
+        "label": label,
+        "username": username,
+        "status": status,
+        "status_emoji": status_emoji,
+        "remain_traffic": remain_traffic,
+        "total_traffic": total_traffic,
+        "used_traffic": used_traffic,
+        "remain_time": remain_time,
+        "remain_days": remain_days,
+        "protocol": proto,
+        "target": tgt,
+        "domain": domain or tgt,
+        "cdn": "CDN" if cdn else "",
+        "flag": str(link.get("flag") or ""),
+        "sub_name": str((sub or {}).get("name") or ""),
+    }
+
+
+def apply_template(template: str, ctx: dict) -> str:
+    text = template or ""
+    for k, v in ctx.items():
+        text = text.replace("{" + k + "}", str(v))
+    # clean double spaces / separators
+    text = re.sub(r"\s*·\s*·\s*", " · ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ·-")
+    return text.strip() or ctx.get("label") or "OXNET"
+
+
+def format_config_remark(
+    link: dict,
+    *,
+    target: str = "",
+    domain: str = "",
+    sub: dict | None = None,
+    cdn: bool = False,
+) -> str:
+    tmpl = (SETTINGS.get("remark_template") or "{status_emoji} {label} · {target}").strip()
+    ctx = build_remark_context(link, target=target, domain=domain, sub=sub, cdn=cdn)
+    return apply_template(tmpl, ctx)
+
+
+def build_info_config_lines(link: dict, sub: dict | None = None, host: str | None = None) -> list[str]:
+    """Display-only share lines (dummy endpoint) for subscription stats."""
+    if not SETTINGS.get("info_configs_enabled", True):
+        return []
+    templates = SETTINGS.get("info_templates")
+    if not isinstance(templates, list) or not templates:
+        return []
+    host = host or get_host()
+    ctx = build_remark_context(link, target=host, domain=host, sub=sub, cdn=False)
+    # one context for whole sub: prefer first link's quota or aggregate? use this link
+    fake = "00000000-0000-0000-0000-000000000001"
+    lines = []
+    for tmpl in templates:
+        t = str(tmpl or "").strip()
+        if not t:
+            continue
+        remark = apply_template(t, ctx)
+        lines.append(
+            f"vless://{fake}@{host}:1?encryption=none&security=none&type=ws&path=%2Finfo#{quote(remark)}"
+        )
+    return lines
+
+
+def build_sub_info_lines(links: list[dict], sub: dict | None, host: str) -> list[str]:
+    """Stats lines once per subscription (use first allowed link or sub aggregate)."""
+    if not SETTINGS.get("info_configs_enabled", True):
+        return []
+    if not links:
+        # still show sub-level if possible
+        dummy = {
+            "label": (sub or {}).get("name") or "اشتراک",
+            "active": bool(sub and sub.get("active", True)),
+            "limit_bytes": 0,
+            "used_bytes": 0,
+            "protocol": "info",
+        }
+        return build_info_config_lines(dummy, sub=sub, host=host)
+    # aggregate used/limit across links
+    base = dict(links[0])
+    total_used = sum(int(l.get("used_bytes") or 0) for l in links)
+    limits = [int(l.get("limit_bytes") or 0) for l in links]
+    if any(x > 0 for x in limits):
+        total_limit = sum(x for x in limits if x > 0)
+    else:
+        total_limit = 0
+    base["used_bytes"] = total_used
+    base["limit_bytes"] = total_limit
+    base["label"] = (sub or {}).get("name") or base.get("label") or "اشتراک"
+    # earliest expiry
+    exp_dates = []
+    for l in links:
+        if l.get("expires_at"):
+            try:
+                exp_dates.append(datetime.fromisoformat(l["expires_at"]))
+            except Exception:
+                pass
+    if exp_dates:
+        base["expires_at"] = min(exp_dates).isoformat()
+    return build_info_config_lines(base, sub=sub, host=host)
 
 def fmt_bytes(b: int) -> str:
     if b < 1024: return f"{b} B"
@@ -789,7 +992,8 @@ async def subscription_single(uuid: str):
     if not link or not is_link_allowed(link):
         raise HTTPException(status_code=404, detail="not found or inactive")
     host = get_host()
-    lines = _share_lines_for_all_domains(uid, link, host)
+    sub = SUBS.get(link.get("sub_id")) if link.get("sub_id") else None
+    lines = build_sub_info_lines([link], sub, host) + _share_lines_for_all_domains(uid, link, host, sub=sub)
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain",
                     headers={"profile-title": quote(link["label"])})
@@ -826,6 +1030,7 @@ async def create_sub(request: Request, _=Depends(require_auth)):
             "uuid_key": uuid_key,
             "created_at": datetime.now().isoformat(),
             "link_ids": [],
+            "active": True,
         }
     await save_state()
     log_activity("sub", f"گروه «{name}» ساخته شد", "ok")
@@ -854,6 +1059,7 @@ async def list_subs(_=Depends(require_auth)):
             **s,
             "password_hash": None,
             "has_password": s.get("password_hash") is not None,
+            "active": s.get("active", True),
             "links_count": len(link_ids),
             "active_count": active_count,
             "total_used_bytes": total_used,
@@ -869,6 +1075,7 @@ async def list_subs(_=Depends(require_auth)):
 @app.patch("/api/subs/{sub_id}")
 async def update_sub(sub_id: str, request: Request, _=Depends(require_auth)):
     body = await request.json()
+    deactivated = False
     async with SUBS_LOCK:
         if sub_id not in SUBS:
             raise HTTPException(status_code=404, detail="sub not found")
@@ -882,8 +1089,22 @@ async def update_sub(sub_id: str, request: Request, _=Depends(require_auth)):
             s["password_hash"] = hash_password(pw) if pw else None
         if "link_ids" in body:
             s["link_ids"] = list(body["link_ids"])
+        if "active" in body:
+            s["active"] = bool(body["active"])
+            deactivated = not s["active"]
+        link_ids = list(s.get("link_ids") or [])
+    # غیرفعال‌سازی اشتراک → کانفیگ‌ها هم قطع شوند
+    if deactivated:
+        async with LINKS_LOCK:
+            for lid in link_ids:
+                if lid in LINKS:
+                    LINKS[lid]["active"] = False
+            for link in LINKS.values():
+                if link.get("sub_id") == sub_id:
+                    link["active"] = False
+        log_activity("sub", f"اشتراک غیرفعال شد و کانفیگ‌هایش قطع شدند", "warn")
     await save_state()
-    return {"ok": True}
+    return {"ok": True, "active": SUBS.get(sub_id, {}).get("active", True)}
 
 @app.delete("/api/subs/{sub_id}")
 async def delete_sub(sub_id: str, _=Depends(require_auth)):
@@ -891,14 +1112,21 @@ async def delete_sub(sub_id: str, _=Depends(require_auth)):
         if sub_id not in SUBS:
             raise HTTPException(status_code=404, detail="sub not found")
         name = SUBS[sub_id].get("name", sub_id)
+        link_ids = list(SUBS[sub_id].get("link_ids") or [])
         del SUBS[sub_id]
+    # حذف اشتراک → کانفیگ‌های وابسته غیرفعال (دیگر کار نکنند)
     async with LINKS_LOCK:
+        for lid in link_ids:
+            if lid in LINKS:
+                LINKS[lid]["active"] = False
+                LINKS[lid]["sub_id"] = None
         for link in LINKS.values():
             if link.get("sub_id") == sub_id:
+                link["active"] = False
                 link["sub_id"] = None
     await save_state()
-    log_activity("sub", f"گروه «{name}» حذف شد", "warn")
-    return {"ok": True, "deleted": sub_id}
+    log_activity("sub", f"گروه «{name}» حذف شد و کانفیگ‌هایش غیرفعال شدند", "warn")
+    return {"ok": True, "deleted": sub_id, "deactivated_links": len(link_ids)}
 
 @app.post("/api/subs/{sub_id}/links")
 async def assign_link_to_sub(sub_id: str, request: Request, _=Depends(require_auth)):
@@ -930,6 +1158,8 @@ async def sub_group_subscription(uuid_key: str, request: Request):
         sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
     if not sub:
         raise HTTPException(status_code=404, detail="not found")
+    if sub.get("active", True) is False:
+        raise HTTPException(status_code=403, detail="subscription disabled")
     if sub.get("password_hash"):
         pw = request.query_params.get("pw", "")
         if hash_password(pw) != sub["password_hash"]:
@@ -937,11 +1167,15 @@ async def sub_group_subscription(uuid_key: str, request: Request):
     host = get_host()
     link_ids = sub.get("link_ids", [])
     async with LINKS_LOCK:
+        allowed_links = []
         lines = []
         for lid in link_ids:
             link = LINKS.get(lid)
             if link and is_link_allowed(link):
-                lines.extend(_share_lines_for_all_domains(lid, link, host))
+                allowed_links.append(link)
+                lines.extend(_share_lines_for_all_domains(lid, link, host, sub=sub))
+        info = build_sub_info_lines(allowed_links, sub, host)
+        lines = info + lines
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(
         content=content,
@@ -1166,15 +1400,16 @@ def _config_ports_for_proto(proto: str) -> tuple[int, ...]:
         return ()
     return (443, 80)
 
-def _share_lines_for_all_domains(uid: str, link: dict, host: str) -> list[str]:
+def _share_lines_for_all_domains(uid: str, link: dict, host: str, sub: dict | None = None) -> list[str]:
     """کانفیگ‌های یک لینک برای دامنه اصلی + کلادفلیر + دامنه‌های فرعی — با پورت 443 (HTTPS)."""
     proto = link.get("protocol", DEFAULT_PROTOCOL)
-    label = link.get("label", "")
     lines: list[str] = []
     if proto == "mtproto":
-        lines.append(generate_share_link(uid, host, remark=f"OXNET-{label}", protocol=proto))
+        remark = format_config_remark(link, target=host, domain=host, sub=sub, cdn=False)
+        lines.append(generate_share_link(uid, host, remark=remark, protocol=proto))
         return lines
-    lines.append(generate_share_link(uid, host, remark=f"OXNET-{label}", protocol=proto))
+    remark = format_config_remark(link, target=host, domain=host, sub=sub, cdn=False)
+    lines.append(generate_share_link(uid, host, remark=remark, protocol=proto))
     # دامنه‌های Cloudflare (با IP تمیز یا خود دامنه)
     for cf in _cf_domains():
         domain = cf.get("domain") or ""
@@ -1183,15 +1418,18 @@ def _share_lines_for_all_domains(uid: str, link: dict, host: str) -> list[str]:
         clean_ips = cf.get("clean_ips") or []
         targets = clean_ips if clean_ips else [domain]
         for target in targets:
-            remark = f"OXNET-CF-{domain}-{label}" + (f"-{target}" if clean_ips else "")
+            remark = format_config_remark(link, target=str(target), domain=domain, sub=sub, cdn=True)
             lines.append(generate_share_link(uid, target, remark=remark, protocol=proto, sni_host=domain))
-    # دامنه‌های فرعی
+    # دامنه‌های فرعی (+ IP/دامنه تمیز مثل کلادفلیر)
     for ed in _extra_domains():
         domain = ed.get("domain") or ""
         if not domain:
             continue
-        remark = f"OXNET-{domain}-{label}"
-        lines.append(generate_share_link(uid, domain, remark=remark, protocol=proto, sni_host=domain))
+        clean_ips = ed.get("clean_ips") or []
+        targets = clean_ips if clean_ips else [domain]
+        for target in targets:
+            remark = format_config_remark(link, target=str(target), domain=domain, sub=sub, cdn=False)
+            lines.append(generate_share_link(uid, target, remark=remark, protocol=proto, sni_host=domain))
     return lines
 
 def domain_sub_urls_for_key(host: str, uuid_key: str) -> dict:
@@ -1281,7 +1519,7 @@ async def cloudflare_subscription(key: str):
         if proto == "mtproto":
             continue
         for target in targets:
-            remark = f"OXNET-CF-{domain}-{link.get('label','')}" + (f"-{target}" if clean_ips else "")
+            remark = format_config_remark(link, target=str(target), domain=domain, cdn=True)
             lines.append(generate_share_link(uid, target, remark=remark, protocol=proto, sni_host=domain))
     content=base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={"profile-title": quote(f"OXNET Cloudflare {domain}")})
@@ -1297,6 +1535,8 @@ async def cloudflare_group_subscription(key: str, uuid_key: str, request: Reques
         sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
     if not sub:
         raise HTTPException(status_code=404, detail="sub not found")
+    if sub.get("active", True) is False:
+        raise HTTPException(status_code=403, detail="subscription disabled")
     if sub.get("password_hash"):
         pw = request.query_params.get("pw", "")
         if hash_password(pw) != sub["password_hash"]:
@@ -1306,17 +1546,20 @@ async def cloudflare_group_subscription(key: str, uuid_key: str, request: Reques
     targets=clean_ips if clean_ips else [domain]
     link_ids=sub.get("link_ids", [])
     async with LINKS_LOCK:
+        allowed=[]
         lines=[]
         for lid in link_ids:
             link=LINKS.get(lid)
             if not link or not is_link_allowed(link):
                 continue
+            allowed.append(link)
             proto=link.get("protocol", DEFAULT_PROTOCOL)
             if proto == "mtproto":
                 continue
             for target in targets:
-                remark=f"OXNET-CF-{domain}-{link.get('label','')}" + (f"-{target}" if clean_ips else "")
+                remark=format_config_remark(link, target=str(target), domain=domain, sub=sub, cdn=True)
                 lines.append(generate_share_link(lid, target, remark=remark, protocol=proto, sni_host=domain))
+        lines = build_sub_info_lines(allowed, sub, get_host()) + lines
     content=base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={"profile-title": quote(f"{sub.get('name','OXNET')} Cloudflare {domain}")})
 
@@ -1343,15 +1586,22 @@ async def api_extra_domain_save(request: Request, _=Depends(require_auth)):
     if not domain or "." not in domain:
         raise HTTPException(status_code=400, detail="دامنه فرعی معتبر نیست")
     name = (body.get("name") or domain).strip()[:80]
+    clean_ips = _norm_clean_ips(body.get("clean_ips") or body.get("ips") or "")
     key = str(body.get("key") or body.get("id") or body.get("slug") or "").strip()
     domains = _extra_domains()
     item = next((x for x in domains if key and (x.get("id") == key or x.get("slug") == key or x.get("domain") == _norm_domain(key))), None)
     if not item:
         item = next((x for x in domains if x.get("domain") == domain), None)
     if not item:
-        item = {"id": generate_uuid(), "slug": _cf_slug(domain), "domain": domain, "created_at": datetime.now().isoformat()}
+        item = {"id": generate_uuid(), "slug": _cf_slug(domain), "domain": domain, "created_at": datetime.now().isoformat(), "clean_ips": []}
         domains.append(item)
-    item.update({"name": name, "domain": domain, "slug": _cf_slug(domain), "updated_at": datetime.now().isoformat()})
+    item.update({
+        "name": name,
+        "domain": domain,
+        "slug": _cf_slug(domain),
+        "clean_ips": clean_ips,
+        "updated_at": datetime.now().isoformat(),
+    })
     await save_state()
     host = get_host()
     return {"ok": True, "domain": item, "sub_url": f"https://{host}/domain-sub/extra/{item['slug']}"}
@@ -1374,6 +1624,8 @@ async def domain_sub_main(uuid_key: str, request: Request):
         sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
     if not sub:
         raise HTTPException(status_code=404, detail="not found")
+    if sub.get("active", True) is False:
+        raise HTTPException(status_code=403, detail="subscription disabled")
     if sub.get("password_hash"):
         pw = request.query_params.get("pw", "")
         if hash_password(pw) != sub["password_hash"]:
@@ -1381,12 +1633,16 @@ async def domain_sub_main(uuid_key: str, request: Request):
     host = get_host()
     link_ids = sub.get("link_ids", [])
     async with LINKS_LOCK:
+        allowed = []
         lines = []
         for lid in link_ids:
             link = LINKS.get(lid)
             if link and is_link_allowed(link):
+                allowed.append(link)
                 proto = link.get("protocol", DEFAULT_PROTOCOL)
-                lines.append(generate_share_link(lid, host, remark=f"OXNET-{link['label']}", protocol=proto))
+                remark = format_config_remark(link, target=host, domain=host, sub=sub)
+                lines.append(generate_share_link(lid, host, remark=remark, protocol=proto))
+        lines = build_sub_info_lines(allowed, sub, host) + lines
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={
         "profile-title": quote(f"{sub.get('name','OXNET')} Main"),
@@ -1395,12 +1651,14 @@ async def domain_sub_main(uuid_key: str, request: Request):
 
 @app.get("/domain-sub/extra/{key}")
 async def domain_sub_extra_all(key: str):
-    """ساب همه کانفیگ‌های فعال فقط روی یک دامنه فرعی."""
+    """ساب همه کانفیگ‌های فعال فقط روی یک دامنه فرعی (+ clean IP)."""
     import base64
     item = _find_extra_domain(key)
     if not item:
         raise HTTPException(status_code=404, detail="extra domain not found")
     domain = item.get("domain")
+    clean_ips = item.get("clean_ips") or []
+    targets = clean_ips if clean_ips else [domain]
     host = get_host()
     async with LINKS_LOCK:
         snap = dict(LINKS)
@@ -1411,7 +1669,9 @@ async def domain_sub_extra_all(key: str):
         proto = link.get("protocol", DEFAULT_PROTOCOL)
         if proto == "mtproto":
             continue
-        lines.append(generate_share_link(uid, domain, remark=f"OXNET-{domain}-{link.get('label','')}", protocol=proto, sni_host=domain))
+        for target in targets:
+            remark = format_config_remark(link, target=str(target), domain=domain, cdn=False)
+            lines.append(generate_share_link(uid, target, remark=remark, protocol=proto, sni_host=domain))
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={"profile-title": quote(f"OXNET {domain}")})
 
@@ -1425,22 +1685,31 @@ async def domain_sub_extra_group(key: str, uuid_key: str, request: Request):
         sub = next((s for s in SUBS.values() if s.get("uuid_key") == uuid_key), None)
     if not sub:
         raise HTTPException(status_code=404, detail="sub not found")
+    if sub.get("active", True) is False:
+        raise HTTPException(status_code=403, detail="subscription disabled")
     if sub.get("password_hash"):
         pw = request.query_params.get("pw", "")
         if hash_password(pw) != sub["password_hash"]:
             raise HTTPException(status_code=403, detail="wrong password")
     domain = item.get("domain")
+    clean_ips = item.get("clean_ips") or []
+    targets = clean_ips if clean_ips else [domain]
     link_ids = sub.get("link_ids", [])
     async with LINKS_LOCK:
+        allowed = []
         lines = []
         for lid in link_ids:
             link = LINKS.get(lid)
             if not link or not is_link_allowed(link):
                 continue
+            allowed.append(link)
             proto = link.get("protocol", DEFAULT_PROTOCOL)
             if proto == "mtproto":
                 continue
-            lines.append(generate_share_link(lid, domain, remark=f"OXNET-{domain}-{link.get('label','')}", protocol=proto, sni_host=domain))
+            for target in targets:
+                remark = format_config_remark(link, target=str(target), domain=domain, sub=sub, cdn=False)
+                lines.append(generate_share_link(lid, target, remark=remark, protocol=proto, sni_host=domain))
+        lines = build_sub_info_lines(allowed, sub, get_host()) + lines
     content = base64.b64encode("\n".join(lines).encode()).decode()
     return Response(content=content, media_type="text/plain", headers={
         "profile-title": quote(f"{sub.get('name','OXNET')} {domain}"),
@@ -1910,7 +2179,30 @@ async def public_sub_data(uuid_key: str, request: Request):
 @app.get("/api/settings")
 async def api_settings(_=Depends(require_auth)):
     ensure_reality_params()
-    return {"settings": SETTINGS, "host": get_host(), "default_host": os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"]), "login_url": get_login_url(), "login_path": get_login_path(), "dashboard_url": get_dashboard_url(), "panel_base": get_panel_base(), "app_port": CONFIG["port"]}
+    SETTINGS.setdefault("remark_template", "{status_emoji} {label} · {target}")
+    SETTINGS.setdefault("info_templates", [
+        "{status_emoji} وضعیت اشتراک: {status}",
+        "👤 کاربر: {username}",
+        "📦 حجم باقیمانده: {remain_traffic} از {total_traffic}",
+        "⏰ زمان باقیمانده: {remain_time}",
+    ])
+    SETTINGS.setdefault("info_configs_enabled", True)
+    return {
+        "settings": SETTINGS,
+        "host": get_host(),
+        "default_host": os.environ.get("RAILWAY_PUBLIC_DOMAIN", CONFIG["host"]),
+        "login_url": get_login_url(),
+        "login_path": get_login_path(),
+        "dashboard_url": get_dashboard_url(),
+        "panel_base": get_panel_base(),
+        "app_port": CONFIG["port"],
+        "data_dir": str(DATA_DIR),
+        "data_persistent": str(DATA_DIR) in ("/data",) or str(DATA_DIR).startswith("/data/") or bool(os.environ.get("DATA_DIR")),
+        "remark_vars": [
+            "label", "username", "status", "status_emoji", "remain_traffic", "total_traffic",
+            "used_traffic", "remain_time", "remain_days", "protocol", "target", "domain", "cdn", "flag", "sub_name",
+        ],
+    }
 
 
 @app.post("/api/settings/reality/generate")
@@ -1932,6 +2224,18 @@ async def api_reality_generate(_=Depends(require_auth)):
 @app.patch("/api/settings")
 async def api_update_settings(request: Request, _=Depends(require_auth)):
     body = await request.json()
+    # قالب نام کانفیگ و خطوط آماری
+    if "remark_template" in body:
+        SETTINGS["remark_template"] = str(body.get("remark_template") or "").strip()[:200] or "{status_emoji} {label} · {target}"
+    if "info_templates" in body:
+        raw = body.get("info_templates")
+        if isinstance(raw, str):
+            raw = [x.strip() for x in raw.split("\n") if x.strip()]
+        if isinstance(raw, list):
+            SETTINGS["info_templates"] = [str(x).strip()[:120] for x in raw if str(x).strip()][:20]
+    if "info_configs_enabled" in body:
+        SETTINGS["info_configs_enabled"] = bool(body.get("info_configs_enabled"))
+
     for section in ("theme", "security", "cleanup", "panel", "railway_tcp", "reality"):
         if section in body and isinstance(body[section], dict):
             SETTINGS.setdefault(section, {}).update(body[section])
