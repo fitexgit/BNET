@@ -7,7 +7,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
 <head>
 <script>(function(){try{var t=localStorage.getItem("oxnet-theme");if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ورود · OXNET</title>
+<title>ورود · OXNET Edge</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -125,15 +125,15 @@ input::placeholder{color:var(--muted);opacity:.7}
           <div class="logo-ver">Stable · v2.0.11</div>
         </div>
       </div>
-      <div class="brand-title">مدیریت سریع، تمیز و چندپروتکل</div>
-      <p class="brand-desc">پنل کنترل برای کانفیگ‌ها، سابسکریپشن‌ها و مانیتورینگ ترافیک — با طراحی ساده و حرفه‌ای.</p>
+      <div class="brand-title">کنسول مدیریت لبه شبکه</div>
+      <p class="brand-desc">مدیریت مسیرهای تحویل ترافیک، اشتراک‌ها و مانیتورینگ مصرف — مناسب سرویس‌های CDN و edge delivery.</p>
       <ul class="brand-features">
-        <li><i class="ti ti-check"></i> VLESS · Trojan · XHTTP · Shadowsocks</li>
-        <li><i class="ti ti-check"></i> سابسکریپشن و دامنه کلادفلیر</li>
-        <li><i class="ti ti-check"></i> مانیتورینگ ترافیک و اتصالات</li>
+        <li><i class="ti ti-check"></i> چند مسیر انتقال استاندارد</li>
+        <li><i class="ti ti-check"></i> اشتراک و دامنه‌های edge</li>
+        <li><i class="ti ti-check"></i> مانیتورینگ نشست و پهنای باند</li>
       </ul>
     </div>
-    <div class="brand-foot">OXNET Control Panel</div>
+    <div class="brand-foot">OXNET Edge Console</div>
   </div>
   <div class="form-pane">
     <div class="card">
@@ -2277,7 +2277,7 @@ body{
   <div class="ov-topbar">
     <div>
       <div class="ov-greeting" id="ov-greeting">سلام، خوش آمدید</div>
-      <div class="ov-sub">نمای کلی سرویس، ترافیک و کانفیگ‌های فعال</div>
+      <div class="ov-sub">نمای کلی لبه شبکه، پهنای باند و مسیرهای فعال</div>
     </div>
     <div class="ov-top-actions">
       <button class="btn btn-o btn-sm" onclick="dashRefresh()"><i class="ti ti-refresh"></i> بروزرسانی</button>
@@ -2745,8 +2745,8 @@ body{
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="card-title"><i class="ti ti-route"></i> Railway TCP Proxy</div>
-      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>در Railway بخش <b>TCP Proxy</b> را روشن کن. دامنه <b dir="ltr">*.proxy.rlwy.net</b> و پورت عمومی را اینجا بگذار. مهم: هدف TCP باید <b>پورت اپ</b> باشد (الان <b dir="ltr" id="tcp-app-port">—</b>) نه لزوماً 443. کانفیگ‌ها با <b dir="ltr">path=/</b> ساخته می‌شوند و UUID از هدر VLESS خوانده می‌شود.</span></div>
+      <div class="card-title"><i class="ti ti-route"></i> Railway TCP Route</div>
+      <div class="cl" style="margin-bottom:12px"><i class="ti ti-info-circle"></i><span>در Railway بخش <b>TCP</b> عمومی را روشن کن. دامنه <b dir="ltr">*.proxy.rlwy.net</b> و پورت عمومی را اینجا بگذار. مهم: هدف TCP باید <b>پورت اپ</b> باشد (الان <b dir="ltr" id="tcp-app-port">—</b>) نه لزوماً 443. مسیر پیش‌فرض <b dir="ltr">path=/</b> است.</span></div>
       <div class="fg"><label>دامنه TCP</label><input class="fi" id="tcp-domain" dir="ltr" placeholder="shuttle.proxy.rlwy.net" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>پورت TCP عمومی</label><input class="fi" id="tcp-port" type="number" min="1" max="65535" placeholder="59740" style="width:100%"></div>
       <div class="fg" style="margin-top:10px"><label>حالت Path</label>
@@ -2756,7 +2756,7 @@ body{
         </select>
       </div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-p btn-sm" type="button" onclick="saveRailwayTcp()"><i class="ti ti-device-floppy"></i> ذخیره TCP Proxy</button>
+        <button class="btn btn-p btn-sm" type="button" onclick="saveRailwayTcp()"><i class="ti ti-device-floppy"></i> ذخیره TCP Route</button>
       </div>
     </div>
 
@@ -3193,9 +3193,9 @@ function cmSelectBase(val, el){
     hideExtra();
     show(mtNote,'flex');
     show(portField,'block');
-    document.getElementById('cm-head-title').textContent = 'ساخت پروکسی جدید';
-    document.getElementById('cm-head-sub').textContent = 'ساخت پروکسی تلگرام (MTProto) با پورت TCP اختصاصی';
-    document.getElementById('cm-submit-text').textContent = 'ساخت پروکسی';
+    document.getElementById('cm-head-title').textContent = 'ساخت مسیر تلگرام';
+    document.getElementById('cm-head-sub').textContent = 'ساخت مسیر MTProto با پورت TCP اختصاصی';
+    document.getElementById('cm-submit-text').textContent = 'ساخت مسیر';
     document.getElementById('cm-head-icon').innerHTML = '<i class="ti ti-brand-telegram"></i>';
   } else {
     show(transportSection,'');
@@ -3800,7 +3800,7 @@ async function saveRailwayTcp(){
     const r=await authF('/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({railway_tcp:{domain,port,path_mode}})});
     const d=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(d.detail||'خطا');
-    toast('تنظیمات Railway TCP Proxy ذخیره شد','ok');
+    toast('تنظیمات Railway TCP Route ذخیره شد','ok');
     loadTcpRealitySettings(d);
   }catch(e){toast(String(e.message||e),'err')}
 }
