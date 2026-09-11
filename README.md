@@ -1,11 +1,24 @@
-OXNET Stable v2.0.11
+# OXNET Edge Console
 
-- Unified professional slate theme (light + dark) — no neon
-- Fixed mismatched button/chart/focus colors across themes
-- Login, dashboard, and public sub pages share the same palette
-- Share links / subscriptions include both HTTPS :443 and HTTP :80
-- Configurable main panel domain in Settings
-- Extra domains (دامنه فرعی) separate from Cloudflare and main domain
-- Main subscription includes configs for all domains (main + Cloudflare + extra)
-- Dedicated subscription links for main domain and each extra domain
-- Cloudflare clean IP supports IPv4, IPv6 and domains
+Edge delivery control panel for managing traffic routes, subscription endpoints,
+domain mappings (including Cloudflare clean addresses), and bandwidth analytics.
+
+## Features
+- Light / dark professional UI
+- Multi-route configuration management
+- Subscription groups and public pages
+- Main domain, Cloudflare domains, and secondary domains
+- Clean IP / hostname lists for edge routes
+- Persistent state via Volume (`/data` or `DATA_DIR`)
+- Remark templates and subscription info lines
+
+## Deploy notes (Railway)
+1. Mount a Volume at `/data` (or set `DATA_DIR`) so state survives redeploys.
+2. Expose the application HTTP port from the `PORT` environment variable.
+3. Optional: configure a public TCP route and enter host/port in Settings.
+
+## Health
+- `GET /` — service metadata
+- `GET /health` or `/healthz` — liveness
+
+This project is framed as an **edge / CDN delivery console**, not a consumer VPN product.
